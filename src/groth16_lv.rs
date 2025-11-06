@@ -1,113 +1,96 @@
 // src/groth16_lv.rs
-//
-// A concrete LV-SNARK interface on top of Groth16 for the MulCircuit:
-//      relation:  x * y = z
-// with z public, x,y private.
-//
 
 use ark_bn254::{Bn254, Fr};
-use ark_ff::{Zero, One};
-use ark_groth16::{Groth16, ProvingKey, VerifyingKey, Proof};
+use ark_groth16::{Groth16, ProvingKey, Proof, VerifyingKey};
 use ark_snark::SNARK;
+use rand::thread_rng; 
+use ark_ff::One;
 
 use crate::circuits::simple_mul::MulCircuit;
+use crate::types::LvMulProof;
 
-/// LV-SNARK proof object: Groth16 proof + scalar a(pi) vector.
-pub struct LvProof {
-    pub groth_proof: Proof<Bn254>,
-    /// a(pi) ∈ F^3 for MulCircuit
-    pub a_vec: Vec<Fr>,
+
+impl LvMulProof {
+    // helper: expose number of coordinates
+    //pub const dim: usize = 3;
 }
 
-/// LV-SNARK instance object: public inputs + scalar b(u) vector.
-pub struct LvInstance {
-    /// public inputs for Groth16 (here: [z])
-    pub public_inputs: Vec<Fr>,
-    /// b(u) ∈ F^3, computable from u (= z) alone
-    pub b_vec: Vec<Fr>,
-}
-
-/// A tiny helper: check that <a, b> = 0
-fn inner_product_zero(a: &[Fr], b: &[Fr]) -> bool {
-    assert_eq!(a.len(), b.len(), "LV vectors must have same length");
-    let mut acc = Fr::zero();
-    for (ai, bi) in a.iter().zip(b.iter()) {
-        acc += *ai * bi;
-    }
-    acc.is_zero()
-}
-
-/// Construct the LV instance from vk and public input z.
-pub fn lv_instance_from_vk_and_z(vk: &VerifyingKey<Bn254>, z: Fr) -> LvInstance {
-    // vk is not strictly needed to compute b_vec in this toy example,
-    // but we include it to make the API future-proof and consistent
-    // with LV-SNARK notation (b depends on (vk, u)).
-    let _ = vk; // silence unused warning
-
-    LvInstance {
-        public_inputs: vec![z],
-        b_vec: vec![Fr::one(), Fr::one(), Fr::zero()],
-    }
-}
-
-/// Prove in LV-SNARK form for MulCircuit:
-/// - takes ProvingKey, private inputs x,y
-/// - computes z = x*y
-/// - generates a Groth16 proof for (x,y,z)
-/// - builds a(pi) = [x*y, -z, 1]
+/// Prover side: generates a Groth16 proof and the LV coordinates (λ1, λ2, λ3)
 ///
-/// Returns (LvProof, z).
+/// - pk: Groth16 proving key for MulCircuit
+/// - x, y: private inputs (witness)
+///
+/// Returns: (LvMulProof, z)
+///   where z = x * y is the public output / instance u.
 pub fn lv_prove_mul(
     pk: &ProvingKey<Bn254>,
     x: Fr,
     y: Fr,
-) -> Result<(LvProof, Fr), Box<dyn std::error::Error>> {
-    let mut rng = rand::thread_rng();
+) -> Result<(LvMulProof, Fr), Box<dyn std::error::Error>> {
+    let mut rng = thread_rng();
 
-    // Public output
+    // Public output z = x * y
     let z = x * y;
 
-    // Circuit with witnesses
+    // Define λ's as functions of (x, y, z):
+    //   λ1 = x*y = z
+    //   λ2 = -z
+    //   λ3 = 1
+    let lambda1 = z;
+    let lambda2 = -z;
+    let lambda3 = Fr::one();
+
+    // Circuit with witnesses and public inputs filled in
     let circuit = MulCircuit {
         x: Some(x),
         y: Some(y),
+        z: Some(z),
+        lambda1: Some(lambda1),
+        lambda2: Some(lambda2),
+        lambda3: Some(lambda3),
     };
 
-    // Usual Groth16 proof
-    let groth_proof = Groth16::<Bn254>::prove(&pk, circuit, &mut rng)?;
+    // Standard Groth16 proof
+    let groth_proof = Groth16::<Bn254>::prove(pk, circuit, &mut rng)?;
 
-    // Scalar-level LV vector a(pi):
-    //
-    //   a(pi) = [x*y, -z, 1]
-    //
-    // This encodes the same R1CS relation x*y - z = 0 used by Groth16,
-    // but at scalar level, suitable for Garg-style LV transformations.
-    let xy = x * y;
-    let a_vec = vec![
-        xy,            // x*y
-        -z,            // -z
-        Fr::one(),     // 1
-    ];
-
-    Ok((LvProof { groth_proof, a_vec }, z))
+    Ok((
+        LvMulProof {
+            groth: groth_proof,
+            lambdas: [lambda1, lambda2, lambda3],
+        },
+        z,
+    ))
 }
 
-/// Verify the LV-SNARK proof:
-/// - standard Groth16 verification on groth_proof,
-/// - plus LV check <a(pi), b(u)> = 0.
+
+/// Linearly verifiable map a(π) = f(vk, u, π) ∈ Fr^3 for MulCircuit.
 ///
-/// For valid proofs, both must hold.
-pub fn lv_verify_mul(
-    vk: &VerifyingKey<Bn254>,
-    inst: &LvInstance,
-    lv_proof: &LvProof,
-) -> bool {
-    // 1) Groth16 verification
-    let groth_ok = Groth16::<Bn254>::verify(vk, &inst.public_inputs, &lv_proof.groth_proof)
-        .unwrap_or(false);
+/// In this instantiation, we have extended the public input of the circuit to:
+///   public_inputs = [ z, λ1, λ2, λ3 ]
+///
+/// The circuit enforces:
+///   z = x*y
+///   λ1 = x*y
+///   λ2 = -z
+///   λ3 = 1
+///
+/// So we define:
+///   a(π) = [λ1, λ2, λ3] = [x*y, -z, 1].
+///
+/// The dependence on π is via the Groth16 proof: only a valid proof can make
+/// these public inputs consistent with some witness (x,y).
+pub fn derive_a_from_proof(
+    _vk: &VerifyingKey<Bn254>,
+    public_inputs: &[Fr],    
+    _proof: &Proof<Bn254>,
+) -> Result<[Fr; 3], Box<dyn std::error::Error>> {
+    if public_inputs.len() != 4 {
+        return Err("derive_a_from_proof: expected 4 public inputs [z, λ1, λ2, λ3]".into());
+    }
 
-    // 2) LV linear check
-    let lv_ok = inner_product_zero(&lv_proof.a_vec, &inst.b_vec);
+    let lambda1 = public_inputs[1];
+    let lambda2 = public_inputs[2];
+    let lambda3 = public_inputs[3];
 
-    groth_ok && lv_ok
+    Ok([lambda1, lambda2, lambda3])
 }

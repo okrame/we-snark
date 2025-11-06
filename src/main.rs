@@ -1,57 +1,64 @@
 mod circuits;
 mod groth16_lv;
+mod types;
+mod wit_dec;
+mod wit_enc;
 
 use ark_bn254::{Bn254, Fr};
-use ark_groth16::{Groth16, Proof};
+use ark_groth16::Groth16;
 use ark_snark::SNARK;
 use circuits::simple_mul::MulCircuit;
 use rand::thread_rng;
 
-use groth16_lv::{lv_prove_mul, lv_instance_from_vk_and_z, lv_verify_mul};
-
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = thread_rng();
 
-    let params = Groth16::<Bn254>::circuit_specific_setup(
-        MulCircuit::<Fr> { x: None, y: None },
-        &mut rng,
-    )?;
+    // Setup
+    let circuit = MulCircuit::<Fr> {
+        x: None,
+        y: None,
+        z: None,
+        lambda1: None,
+        lambda2: None,
+        lambda3: None,
+    };
+    
+    let (pk, vk) = Groth16::<Bn254>::circuit_specific_setup(circuit, &mut rng)?;
+    
+    println!("╔════════════════════════════════════════╗");
+    println!("║        CIRCUIT SETUP                   ║");
+    println!("╚════════════════════════════════════════╝");
+    println!("Number of constraints: {}", pk.vk.gamma_abc_g1.len() - 1);
+    println!();
 
+    // Witness
     let x = Fr::from(3u64);
     let y = Fr::from(4u64);
-    let z = x * y; 
 
-    let circuit = MulCircuit {
-        x: Some(x),
-        y: Some(y),
-    };
+    // Generate LV proof
+    println!("╔════════════════════════════════════════╗");
+    println!("║        PROOF GENERATION                ║");
+    println!("╚════════════════════════════════════════╝");
+    let (lv_proof, z) = groth16_lv::lv_prove_mul(&pk, x, y)?;
+    println!(" LV proof generated for z = {}", z);
+    println!();
 
-    let proof: Proof<Bn254> = Groth16::<Bn254>::prove(&params.0, circuit, &mut rng)?;
+    // Encrypt a message
+    println!("╔════════════════════════════════════════╗");
+    println!("║        ENCRYPTION                      ║");
+    println!("╚════════════════════════════════════════╝");
+    let msg = b"my secret message";
+    let ct = wit_enc::we_encrypt(&vk, z, msg)?;
+    println!();
 
-    // verifying key
-    let pvk = Groth16::<Bn254>::process_vk(&params.1)?;
-
-    // verify the proof against the public input z
-    let verified = Groth16::<Bn254>::verify_with_processed_vk(&pvk, &[z], &proof)?;
-    assert!(verified);
-
-    println!("Proof verified successfully!");
-
-    // extract the linear pairing system for this (vk, u, π)
-    let vk = &params.1;
-
-    // --- LV PROVE ---
-    let (lv_proof, z) = lv_prove_mul(&params.0, x, y)?;
-    println!("z = x * y = {}", z);
-
-    // --- LV INSTANCE SIDE ---
-    let inst = lv_instance_from_vk_and_z(&vk, z);
-
-    // --- LV VERIFY ---
-    let ok = lv_verify_mul(&vk, &inst, &lv_proof);
-    println!("LV-SNARK verify: {}", ok);
-
+    // Decrypt using the proof
+    println!("╔════════════════════════════════════════╗");
+    println!("║        DECRYPTION                      ║");
+    println!("╚════════════════════════════════════════╝");
+    let plaintext = wit_dec::we_decrypt(&vk, &ct, &lv_proof)?;
+    assert_eq!(plaintext, msg);
+    println!();
+    println!("Message recovered: {:?}", String::from_utf8_lossy(&plaintext));
 
     Ok(())
 }
