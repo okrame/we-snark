@@ -5,9 +5,11 @@ edition = "2024"
 
 [dependencies]
 ark-bn254 = "0.4.0"
+ark-bls12-377 = "0.4"
+ark-bw6-761 = "0.4"
 ark-ec = "0.4.0"
 ark-ff = "0.4.0"
-ark-groth16 = "0.4.0"
+ark-groth16 = { version = "0.4", features = ["r1cs"] }
 ark-r1cs-std = "0.4.0"
 ark-relations = "0.4.0"
 ark-snark = "0.4.0"
@@ -15,3 +17,6 @@ rand = "0.8"
 blake2 = "0.10"
 aes-gcm = "0.10.3"
 sha2 = "0.10.9"
+blake3 = "1"
+anyhow = "1"
+ark-crypto-primitives = { version = "0.4", default-features = false, features = ["snark"] }
