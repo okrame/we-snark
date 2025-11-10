@@ -1,124 +1,111 @@
-// src/scs.rs
-use ark_bw6_761::{Fr as F, G1Projective as G1, G2Projective as G2};
-use ark_ec::Group;
-use ark_ff::{Field, Zero, UniformRand};
-use ark_poly::{DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, univariate::DensePolynomial};
-use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{vec::Vec, rand::Rng};
-use anyhow::Result;
+use ark_bn254::{Bn254, Fr, G1Projective, G2Projective, G1Affine, G2Affine};
+use ark_ec::{pairing::Pairing, CurveGroup};
+use ark_ff::{Field, One, PrimeField, Zero};
+use ark_poly::{EvaluationDomain, GeneralEvaluationDomain, Polynomial, UVPolynomial, univariate::DensePolynomial};
+use rand::Rng;
 
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
-pub struct SrsG1 {
-    pub tau_pows: Vec<G1>,
+pub struct CRS {
+    pub n: usize,           // domain size (power of two)
+    pub n_inv: Fr,          // 1/n (y* in Construction 6 when x* = 0)
+    pub tau: Fr,            // secret (only used in setup to derive powers)
+    pub g1_pows: Vec<G1Projective>, // [tau^0]_1 .. [tau^N]_1
+    pub g2_pows: Vec<G2Projective>, // [tau^0]_2 .. [tau^N]_2
+    pub N: usize,                 // max degree supported by CRS
+    pub vanishing_coeffs: Vec<Fr>,// coeffs of Z_D(X)
+    pub domain: GeneralEvaluationDomain<Fr>, // D (roots of unity)
 }
 
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
-pub struct SrsG2 {
-    pub tau_pows: Vec<G2>,
-}
+impl CRS {
+    pub fn setup<R: Rng>(mut rng: R, n: usize) -> Self {
+        // n must be power-of-two
+        let domain = GeneralEvaluationDomain::<Fr>::new(n).expect("radix-2 domain");
+        let n_inv = Fr::from(n as u64).inverse().unwrap(); // y* = 1/n at x* = 0
+        let tau = Fr::from(rng.gen::<u64>() as u128);
+        // choose N >= 2n so we have indices N-n+2 and N (as in Construction 6)
+        let N = 2 * n + 4;
 
-pub struct Domain {
-    pub n: usize,
-    pub d: GeneralEvaluationDomain<F>,
-    pub points: Vec<F>,
-}
+        let mut g1_pows = Vec::with_capacity(N + 1);
+        let mut g2_pows = Vec::with_capacity(N + 1);
+        let g1 = <Bn254 as Pairing>::G1::generator();
+        let g2 = <Bn254 as Pairing>::G2::generator();
 
-impl Clone for Domain {
-    fn clone(&self) -> Self {
-        let d = GeneralEvaluationDomain::<F>::new(self.n).unwrap();
-        Self {
-            n: self.n,
-            d,
-            points: self.points.clone(),
+        let mut tpow = Fr::one();
+        for _ in 0..=N {
+            g1_pows.push(g1.mul_bigint(tpow.into_bigint()));
+            g2_pows.push(g2.mul_bigint(tpow.into_bigint()));
+            tpow *= tau;
         }
+
+        let Z = domain.vanishing_polynomial(); // Z_D(X)
+        let vanishing_coeffs = Z.coeffs().to_vec();
+        CRS { n, n_inv, tau, g1_pows, g2_pows, N, vanishing_coeffs, domain }
     }
-}
 
-pub struct Ck {
-    pub domain: Domain,
-    pub g1: SrsG1,
-    pub g2: SrsG2,
-}
+    /// Commit polynomial in G1: returns [F(τ)]_1 = Σ f_j [τ^j]_1
+    pub fn commit_poly_g1(&self, coeffs: &[Fr]) -> G1Projective {
+        coeffs.iter().enumerate().fold(G1Projective::zero(), |acc, (j, c)| {
+            if c.is_zero() { acc } else { acc + self.g1_pows[j].mul_bigint((*c).into_bigint()) }
+        })
+    }
 
-impl Clone for Ck {
-    fn clone(&self) -> Self {
-        Self {
-            domain: self.domain.clone(),
-            g1: self.g1.clone(),
-            g2: self.g2.clone(),
+    /// Commit polynomial in G2: returns [F(τ)]_2 = Σ f_j [τ^j]_2
+    pub fn commit_poly_g2(&self, coeffs: &[Fr]) -> G2Projective {
+        coeffs.iter().enumerate().fold(G2Projective::zero(), |acc, (j, c)| {
+            if c.is_zero() { acc } else { acc + self.g2_pows[j].mul_bigint((*c).into_bigint()) }
+        })
+    }
+
+    /// Interpolate evaluations `vals` on D to DensePolynomial coeffs
+    pub fn interpolate(&self, evals: &[Fr]) -> DensePolynomial<Fr> {
+        assert_eq!(evals.len(), self.n);
+        // inverse FFT to get coeffs over monomial basis
+        let mut v = evals.to_vec();
+        self.domain.ifft_in_place(&mut v);
+        DensePolynomial::from_coefficients_vec(v)
+    }
+
+    /// Evaluate DensePolynomial at x (field)
+    pub fn eval_poly(coeffs: &[Fr], x: &Fr) -> Fr {
+        // Horner
+        let mut acc = Fr::zero();
+        for c in coeffs.iter().rev() {
+            acc *= *x;
+            acc += *c;
         }
-    }
-}
-
-pub fn cgen_scs<R: Rng>(rng: &mut R, n: usize, max_deg: usize) -> Result<(F, Ck)> {
-    let tau = F::rand(rng);
-    let d = GeneralEvaluationDomain::<F>::new(n)
-        .ok_or_else(|| anyhow::anyhow!("bad domain"))?;
-    
-    let mut g1 = Vec::with_capacity(max_deg + 1);
-    let mut g2 = Vec::with_capacity(max_deg + 1);
-    let g1_gen = G1::generator();
-    let g2_gen = G2::generator();
-
-    let mut tau_pow = F::ONE;
-    for _ in 0..=max_deg {
-        g1.push(g1_gen * tau_pow);
-        g2.push(g2_gen * tau_pow);
-        tau_pow *= tau;
+        acc
     }
 
-    let points = d.elements().collect::<Vec<_>>();
-    
-    Ok((tau, Ck {
-        domain: Domain { n, d, points },
-        g1: SrsG1 { tau_pows: g1 },
-        g2: SrsG2 { tau_pows: g2 },
-    }))
-}
-
-pub fn commit_g1(ck: &Ck, w: &[F]) -> G1 {
-    assert_eq!(w.len(), ck.domain.n);
-    interpolate_eval_in_exponent_g1(&ck.g1.tau_pows, &ck.domain, w)
-}
-
-pub fn commit_g2(ck: &Ck, w: &[F]) -> G2 {
-    assert_eq!(w.len(), ck.domain.n);
-    interpolate_eval_in_exponent_g2(&ck.g2.tau_pows, &ck.domain, w)
-}
-
-fn interpolate_eval_in_exponent_g1(table: &[G1], dom: &Domain, w: &[F]) -> G1 {
-    let poly = DensePolynomial::from_coefficients_vec(dom.d.ifft(w));
-    poly.coeffs.iter().enumerate().fold(G1::zero(), |acc, (j, c)| {
-        if c.is_zero() { acc } else { acc + table[j] * c }
-    })
-}
-
-fn interpolate_eval_in_exponent_g2(table: &[G2], dom: &Domain, w: &[F]) -> G2 {
-    let poly = DensePolynomial::from_coefficients_vec(dom.d.ifft(w));
-    poly.coeffs.iter().enumerate().fold(G2::zero(), |acc, (j, c)| {
-        if c.is_zero() { acc } else { acc + table[j] * c }
-    })
-}
-
-pub fn xstar_ystar_fft(dom: &Domain) -> (F, F) {
-    // For multiplicative FFT domains D, Li(1) = 1/n for all i
-    (F::ONE, F::ONE / F::from(dom.n as u64))
-}
-
-pub fn z_at_tau_g2(ck: &Ck) -> G2 {
-    let n = ck.domain.n;
-    ck.g2.tau_pows[n] - G2::generator()
-}
-
-pub fn aux_bands_for_si(ck: &Ck, si: F, n: usize, nmax: usize) -> (Vec<G1>, Vec<G1>) {
-    let mut low = Vec::with_capacity(n);
-    for j in 0..n {
-        low.push(ck.g1.tau_pows[j] * si);
+    /// Multiply two polynomials (truncate/extend as needed)
+    pub fn mul_poly(a: &DensePolynomial<Fr>, b: &DensePolynomial<Fr>) -> DensePolynomial<Fr> {
+        a.mul(b)
     }
-    let mut high = Vec::with_capacity(n);
-    for j in 0..n {
-        let idx = nmax - n + j;
-        high.push(ck.g1.tau_pows[idx] * si);
+
+    /// Divide P by Q; returns (quotient, remainder).
+    pub fn div_rem(P: &DensePolynomial<Fr>, Q: &DensePolynomial<Fr>) -> (DensePolynomial<Fr>, DensePolynomial<Fr>) {
+        P.divide_with_q_and_r(Q).expect("non-zero divisor")
     }
-    (low, high)
+
+    pub fn poly_from_coeffs(coeffs: Vec<Fr>) -> DensePolynomial<Fr> {
+        DensePolynomial::from_coefficients_vec(coeffs)
+    }
+
+    pub fn poly_from_roots(&self, roots: &[Fr]) -> DensePolynomial<Fr> {
+        let mut poly = DensePolynomial::from_coefficients_vec(vec![Fr::one()]);
+        for r in roots {
+            // (X - r)
+            let m = DensePolynomial::from_coefficients_vec(vec![-*r, Fr::one()]);
+            poly = poly.mul(&m);
+        }
+        poly
+    }
+
+    /// Convenience: [τ^k]_2 in G2
+    pub fn g2_tau_pow(&self, k: usize) -> G2Projective {
+        self.g2_pows[k]
+    }
+
+    /// Convenience: [τ^k]_1 in G1
+    pub fn g1_tau_pow(&self, k: usize) -> G1Projective {
+        self.g1_pows[k]
+    }
 }

@@ -1,82 +1,65 @@
-// src/main.rs
-mod inner;
 mod scs;
-mod lv_gadgets;
+mod iip;
+mod nonzero;
+mod verifier;
 mod we;
-mod routing;
 
-use ark_bw6_761::Fr as OuterFr;
+use ark_bn254::Fr;
+use rand::{rng, Rng};
 
-fn main() -> anyhow::Result<()> {
-    println!("╔════════════════════════════════════════╗");
-    println!("║   WE CONSTRUCTION 2 SETUP              ║");
-    println!("╚════════════════════════════════════════╝");
-    
-    let n = 8usize;
-    let nmax = 2 * n;
-    let (pp, crs) = we::setup(&mut rand::thread_rng(), n, nmax);
-    println!("✓ SCS CRS generated (powers-of-τ)");
-    println!("  Domain size: {}", n);
-    println!("  Max degree: {}", nmax);
-    
-    let s_vals: Vec<OuterFr> = (0..n)
-        .map(|i| OuterFr::from((42 + i) as u64))
-        .collect();
-    let (idx, _aux) = we::auxgen(&pp, &crs, &s_vals, nmax);
-    println!("✓ AuxGen completed: IIP index with {} elements", s_vals.len());
-    
-    let (ed, dd) = we::digest(&pp, &crs, &idx);
-    println!("✓ Digest computed: EncDigest + DecDigest");
-    println!();
+use scs::CRS;
+use iip::{iip_digest, iip_prove};
+use nonzero::nonzero_prove;
+use verifier::{LVDigest, LVProof};
+use we::{aead_encrypt, decrypt_with_lv, derive_key_from_lv};
 
-    println!("╔════════════════════════════════════════╗");
-    println!("║   WITNESS ENCRYPTION                   ║");
-    println!("╚════════════════════════════════════════╝");
-    
-    let msg = b"hello recursive WE with proper Garg construction";
-    let ct = we::enc(&mut rand::thread_rng(), &ed, msg);
-    println!("✓ Message encrypted");
-    println!("  Plaintext: {:?}", String::from_utf8_lossy(msg));
-    println!("  Ciphertext ct₁ slots: {}", ct.c1_g1.len());
-    println!();
+fn main() {
+    let mut rng = rng();
 
-    println!("╔════════════════════════════════════════╗");
-    println!("║   LV PROOF GENERATION                  ║");
-    println!("╚════════════════════════════════════════╝");
-    
-    let w: Vec<OuterFr> = (0..n)
-        .map(|i| OuterFr::from((i + 1) as u64))
-        .collect();
-    
-    println!("→ Precomputing Lagrange basis...");
-    let lag = lv_gadgets::precompute_lagrange(&crs.ck.domain);
-    println!("✓ Lagrange basis precomputed");
-    
-    println!("→ Generating LV proof components...");
-    let pi = we::prove(&dd, &idx, &crs.ck, &w, &lag)?;
-    println!("✓ LV proof generated with components:");
-    println!("  - [Q_X(τ)]₁  (indexed inner product quotient)");
-    println!("  - [Q_Z(τ)]₁  (vanishing polynomial quotient)");
-    println!("  - [w(τ)]₂    (witness commitment in G2)");
-    println!("  - [v(τ)]₁    (inner product commitment in G1)");
-    println!("  - Zero-check proof (NonZero gadget)");
-    println!();
+    // --- Parameters ---
+    // Domain size n = 4: slots [x, y, z, 1]
+    let n = 4;
+    let crs = CRS::setup(&mut rng, n);
 
-    println!("╔════════════════════════════════════════╗");
-    println!("║   WITNESS DECRYPTION                   ║");
-    println!("╚════════════════════════════════════════╝");
-    
-    println!("→ Performing linear verification...");
-    let pt = we::dec(&dd, &ct, &pi)?;
-    println!("✓ Linear verification equations satisfied:");
-    println!("  e(C,w) = e(v,[y*⁻¹]) · e([Q_X],[τ-x*]) · e([Q_Z],Z)");
-    println!("→ Key derived via H(s·b)");
-    println!("→ AEAD decryption...");
-    println!("✓ Decrypted plaintext: {:?}", String::from_utf8_lossy(&pt));
-    
-    assert_eq!(pt, msg, "Decryption mismatch!");
-    println!("✓ Decryption successful - plaintexts match!");
-    println!();
+    // Public index s (we use s = [0,0,1,0] so v = [z]_1; the multiplication relation is encoded
+    // in the field-side construction of B(X) with (x, y, z) chosen s.t. x*y=z).
+    let s = vec![Fr::from(0u32), Fr::from(0u32), Fr::from(1u32), Fr::from(0u32)];
 
-    Ok(())
+    // Instance: choose (x, y), set z = x*y
+    let x = Fr::from(12u32);
+    let y = Fr::from(17u32);
+    let z = x * y;
+
+    // Witness evals on D: [x, y, z, 1]
+    let w = vec![x, y, z, Fr::from(1u32)];
+
+    // --- Digest / Prove ---
+    let iip_vk = iip_digest(&crs, &s);
+    let iip_pi = iip_prove(&crs, &s, &w);
+    let nz_pi = nonzero_prove(&crs, &w, 3); // enforce w[3] == 1
+
+    let dg = LVDigest { iip: iip_vk, one_idx: 3 };
+    let pi = LVProof { iip: iip_pi, nz: nz_pi };
+
+    // --- Derive key from LV (what decryptor will do) ---
+    let key = derive_key_from_lv(&dg.iip, &pi.iip);
+    let mut msg = b"hello, LV world".to_vec();
+    let nonce: [u8;12] = rng.gen();
+
+    // Encrypt (encryptor does NOT know the witness; here we just reuse the same derived key
+    // to demonstrate end-to-end; in a full WE, the encryptor uses the LV verifier’s linear
+    // coefficients to produce a header that makes this key recoverable).
+    let tag: Vec<u8> = aead_encrypt(key, nonce, &mut msg, b"AAD");
+    
+    let lv_params = we::lv_public_linear_params(&crs, &dg);
+    println!("A_LV = {:?}", lv_params.shape.a);
+    println!("b_LV[3] = {:?}", lv_params.shape.b[3]);
+
+    // --- Decrypt using witness (x,y) that satisfies x*y=z ---
+    let mut ct = msg.clone();
+    let maybe_pt = decrypt_with_lv(&dg, &pi, nonce, &mut ct, &tag, b"AAD");
+    match maybe_pt {
+        Some(pt) => println!("Decryption OK: {}", String::from_utf8_lossy(&pt)),
+        None => println!("Decryption failed"),
+    }
 }

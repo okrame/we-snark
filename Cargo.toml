@@ -4,31 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Core arkworks libraries - ALL must be version 0.4.x
-ark-ff = "0.4"
-ark-ec = "0.4"
-ark-poly = "0.4"
-ark-serialize = "0.4"
-ark-std = { version = "0.4", features = ["std"] }
-ark-relations = "0.4"
-ark-snark = "0.4"
-
-# Curve implementations
-ark-bls12-377 = "0.4"  # Inner curve for Groth16
-ark-bw6-761 = "0.4"    # Outer curve for WE
-
-# SNARK systems
-ark-groth16 = "0.4"
-
-# Crypto primitives  
-blake3 = "1.5"         # Hash function for KDF
-aes-gcm = "0.10"       # AEAD encryption
-
-# Utilities
-rand = "0.8"
-anyhow = "1.0"
-hex = "0.4"            # For hex encoding in display
-
-[features]
-default = []
-std = ["ark-std/std"]
+aes-gcm = "0.10.3"
+ark-bn254 = "0.5.0"
+ark-ec = "0.5.0"
+ark-ff = "0.5.0"
+ark-poly = "0.5.0"
+ark-serialize = "0.5.0"
+rand = "0.9.2"
+sha2 = "0.10.9"
