@@ -44,7 +44,7 @@ fn main() {
     // --- Derive key from LV (what decryptor will do) ---
     let key = derive_key_from_lv(&dg.iip, &pi.iip);
     let mut msg = b"hello, LV world".to_vec();
-    let nonce: [u8;12] = rng.gen();
+    let nonce: [u8;12] = rng.random();
 
     // Encrypt (encryptor does NOT know the witness; here we just reuse the same derived key
     // to demonstrate end-to-end; in a full WE, the encryptor uses the LV verifier’s linear

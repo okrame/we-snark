@@ -20,7 +20,7 @@ impl CRS {
         // n must be power-of-two
         let domain = GeneralEvaluationDomain::<Fr>::new(n).expect("radix-2 domain");
         let n_inv = Fr::from(n as u64).inverse().unwrap(); // y* = 1/n at x* = 0
-        let tau = Fr::from(rng.gen::<u64>() as u128);
+        let tau = Fr::from(rng.random() as u128);
         // choose N >= 2n so we have indices N-n+2 and N (as in Construction 6)
         let N = 2 * n + 4;
 
