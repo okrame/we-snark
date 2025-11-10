@@ -18,7 +18,7 @@ pub struct LVDigest {
 }
 
 pub struct LVCoords(pub [Fq12; LV_NUM_COORDS]);
-fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<LVCoords> {
+pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<LVCoords> {
     // The NonZero and IIP commitments to B(τ) must match
     if pi.iip.w_tau_2 != pi.nz.w_tau_2 { return None; }
 

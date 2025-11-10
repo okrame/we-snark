@@ -1,9 +1,9 @@
 //src/iip.rs
 use ark_bn254::{Bn254, Fr, G1Projective, G2Projective};
-use ark_ec::pairing::{Pairing};
 use ark_ec::PrimeGroup;
-use ark_ff::{Field, Zero, One, PrimeField};
-use ark_poly::{univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
+use ark_ec::pairing::Pairing;
+use ark_ff::{Field, One, PrimeField, Zero};
+use ark_poly::{DenseUVPolynomial, Polynomial, univariate::DensePolynomial};
 
 use crate::scs::CRS;
 
@@ -11,24 +11,24 @@ use crate::scs::CRS;
 #[allow(non_snake_case)]
 #[allow(dead_code)]
 pub struct IIPDigest {
-    pub x_star: Fr,                // we use 0
-    pub y_star: Fr,                // 1/n
-    pub C: G1Projective,           // y* · [Σ s_i L_i(τ)]_1
-    pub Z_tau_2: G2Projective,     // [Z(τ)]_2
-    pub tau_2: G2Projective,       // [τ]_2  (since x*=0, [τ - x*]_2 = [τ]_2)
+    pub x_star: Fr,                           // we use 0
+    pub y_star: Fr,                           // 1/n
+    pub C: G1Projective,                      // y* · [Σ s_i L_i(τ)]_1
+    pub Z_tau_2: G2Projective,                // [Z(τ)]_2
+    pub tau_2: G2Projective,                  // [τ]_2  (since x*=0, [τ - x*]_2 = [τ]_2)
     pub tau_N_minus_n_plus_2_2: G2Projective, // [τ^{N-n+2}]_2
-    pub tau_N_2: G2Projective,     // [τ^N]_2
+    pub tau_N_2: G2Projective,                // [τ^N]_2
     pub n: usize,
     pub N: usize,
 }
 #[allow(non_snake_case)]
 pub struct IIPProof {
-    pub w_tau_2: G2Projective,     // [B(τ)]_2 = SCS(G2).Commit(w)
-    pub v_g1: G1Projective,        // v = Σ w_i [s_i]_1
-    pub QZ_tau_1: G1Projective,    // [Q_Z(τ)]_1
-    pub QX_tau_1: G1Projective,    // [Q_X(τ)]_1
-    pub QX_hat_tau_1: G1Projective,// [Q̂_X(τ)]_1 = [X^{N-n+2} Q_X(X)]_1
-    pub v_hat_tau_1: G1Projective, // [v̂(τ)]_1 = [X^N · (Σ w_i s_i)]_1
+    pub w_tau_2: G2Projective,      // [B(τ)]_2 = SCS(G2).Commit(w)
+    pub v_g1: G1Projective,         // v = Σ w_i [s_i]_1
+    pub QZ_tau_1: G1Projective,     // [Q_Z(τ)]_1
+    pub QX_tau_1: G1Projective,     // [Q_X(τ)]_1
+    pub QX_hat_tau_1: G1Projective, // [Q̂_X(τ)]_1 = [X^{N-n+2} Q_X(X)]_1
+    pub v_hat_tau_1: G1Projective,  // [v̂(τ)]_1 = [X^N · (Σ w_i s_i)]_1
 }
 
 /// Build vk for IIP given public index s in F^n
@@ -84,7 +84,11 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     let t = v_scalar * crs.n_inv; // t = <w,s>/y*
     // subtract constant t
     let mut P_coeffs = P.coeffs().to_vec();
-    P_coeffs[0] -= t;
+    if P_coeffs.is_empty() {
+        P_coeffs.push(-t);
+    } else {
+        P_coeffs[0] -= t;
+    }
     P = CRS::poly_from_coeffs(P_coeffs);
 
     // Z(X)
@@ -147,10 +151,7 @@ pub fn iip_verify(d: &IIPDigest, pi: &IIPProof) -> bool {
     // v ◦ [y*^{-1}]_2
     let y_inv = d.y_star.inverse().unwrap();
     let v_g1_scaled = pi.v_g1.mul_bigint(y_inv.into_bigint());
-    let rhs1_v = <Bn254 as Pairing>::pairing(
-        v_g1_scaled,
-        <Bn254 as Pairing>::G2::generator(),
-    );
+    let rhs1_v = <Bn254 as Pairing>::pairing(v_g1_scaled, <Bn254 as Pairing>::G2::generator());
 
     // [QX(τ)]_1 ◦ [τ - x*]_2, and we have x* = 0 ⇒ [τ - x*]_2 = [τ]_2
     let term_qx = <Bn254 as Pairing>::pairing(pi.QX_tau_1, d.tau_2);
@@ -167,27 +168,20 @@ pub fn iip_verify(d: &IIPDigest, pi: &IIPProof) -> bool {
 
     // 2) [QX(τ)]_1 ◦ [τ^{N-n+2}]_2 = [Q̂X(τ)]_1 ◦ [1]_2
     let lhs2 = <Bn254 as Pairing>::pairing(pi.QX_tau_1, d.tau_N_minus_n_plus_2_2);
-    let rhs2 = <Bn254 as Pairing>::pairing(
-        pi.QX_hat_tau_1,
-        <Bn254 as Pairing>::G2::generator(),
-    );
+    let rhs2 = <Bn254 as Pairing>::pairing(pi.QX_hat_tau_1, <Bn254 as Pairing>::G2::generator());
     if lhs2 != rhs2 {
         return false;
     }
 
     // 3) v ◦ [τ^N]_2 = [v̂(τ)]_1 ◦ [1]_2
     let lhs3 = <Bn254 as Pairing>::pairing(pi.v_g1, d.tau_N_2);
-    let rhs3 = <Bn254 as Pairing>::pairing(
-        pi.v_hat_tau_1,
-        <Bn254 as Pairing>::G2::generator(),
-    );
+    let rhs3 = <Bn254 as Pairing>::pairing(pi.v_hat_tau_1, <Bn254 as Pairing>::G2::generator());
     if lhs3 != rhs3 {
         return false;
     }
 
     true
 }
-
 
 // ------- small polynomial helpers -------
 

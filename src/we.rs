@@ -1,19 +1,24 @@
 //src/we.rs
 use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce};
 use sha2::{Digest, Sha256};
-use ark_ff::{Field, PrimeField};
-use ark_bn254::{Bn254};
+use ark_ff::{Field, PrimeField, UniformRand, Zero, One};
+use ark_bn254::{Bn254, Fr, Fq12};
 use ark_ec::{pairing::Pairing, PrimeGroup};
 use ark_serialize::CanonicalSerialize;
-use crate::verifier::{LVDigest, LVProof, LVShape};
+use rand::Rng;
+use crate::verifier::{LVDigest, LVProof, LVShape, LV_NUM_COORDS};
 use crate::scs::CRS;
 use crate::iip::{IIPDigest, IIPProof};
+
+/// LV header containing random linear combination coefficients
+#[derive(Clone)]
+pub struct LVHeader {
+    pub r: Vec<Fr>,
+}
 
 /// Public parameters an encryptor will use.
 pub struct LVPublicLinearParams {
     pub shape: LVShape,
-    // (optionally) you can also expose the GT bases for each c_j,
-    // but that's not strictly needed for the high-level A_LV·π = b_LV picture.
 }
 
 /// What the encryptor calls to obtain A_LV, b_LV.
@@ -22,9 +27,111 @@ pub fn lv_public_linear_params(crs: &CRS, dg: &LVDigest) -> LVPublicLinearParams
     LVPublicLinearParams { shape }
 }
 
+fn gt_pow(base: &Fq12, exp: &Fr) -> Fq12 {
+    base.pow(exp.into_bigint())
+}
+
+fn derive_alphas(shape: &LVShape, r: &[Fr]) -> [Fr; LV_NUM_COORDS] {
+    let mut alpha = [Fr::zero(); LV_NUM_COORDS];
+    for i in 0..shape.rows {
+        let ri = r[i];
+        for j in 0..LV_NUM_COORDS {
+            match shape.a[i][j] {
+                1  => { alpha[j] += ri; }
+                -1 => { alpha[j] -= ri; }
+                _  => {}
+            }
+        }
+    }
+    alpha
+}
+
+fn kdf_from_gt(gt: &Fq12) -> [u8; 32] {
+    let mut bytes = Vec::new();
+    gt.serialize_compressed(&mut bytes).unwrap();
+    let digest = Sha256::digest(&bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+/// Encryptor: sample r, compute B = Π b_i^{r_i}, return (header, key=H(B))
+#[allow(non_snake_case)]
+pub fn lv_make_header<R: Rng + ?Sized>(
+    params: &LVPublicLinearParams,
+    rng: &mut R,
+) -> (LVHeader, [u8; 32]) {
+    let rows = params.shape.rows;
+    let mut r = Vec::with_capacity(rows);
+
+    for _ in 0..rows {
+        let mut buf = [0u8; 32];
+        rng.fill(&mut buf);
+        let ri = Fr::from_le_bytes_mod_order(&buf);
+        r.push(ri);
+    }
+
+    // RHS: B = Π_i b_i^{r_i}
+    let mut B = Fq12::one();
+    for i in 0..rows {
+        B *= gt_pow(&params.shape.b[i], &r[i]);
+    }
+
+    let key = kdf_from_gt(&B);
+    (LVHeader { r }, key)
+}
+
+/// Decryptor: recompute coords from π, aggregate with α = r·A, check vs public RHS, derive key.
+pub fn lv_key_from_header(
+    crs: &CRS,
+    dg: &LVDigest,
+    shape: &LVShape,
+    hdr: &LVHeader,
+    pi: &LVProof,
+) -> Option<[u8; 32]> {
+    if hdr.r.len() != shape.rows { return None; }
+
+    if !crate::verifier::lv_verify(crs, dg, pi) { return None; }
+
+    let coords = crate::verifier::build_lv_coords(crs, dg, pi)?;
+
+    let alpha = derive_alphas(shape, &hdr.r);
+
+    let mut lhs = Fq12::one();
+    for j in 0..LV_NUM_COORDS {
+        lhs *= gt_pow(&coords.0[j], &alpha[j]);
+    }
+
+    let mut rhs = Fq12::one();
+    for i in 0..shape.rows {
+        rhs *= gt_pow(&shape.b[i], &hdr.r[i]);
+    }
+
+    if lhs != rhs { return None; }
+    Some(kdf_from_gt(&rhs))
+}
+
+pub fn decrypt_with_lv_header(
+    crs: &CRS,
+    dg: &LVDigest,
+    params: &LVPublicLinearParams,
+    hdr: &LVHeader,
+    pi: &LVProof,
+    nonce: [u8; 12],
+    ct: &mut Vec<u8>,
+    tag: &[u8],
+    aad: &[u8],
+) -> Option<Vec<u8>> {
+    let key = lv_key_from_header(crs, dg, &params.shape, hdr, pi)?;
+    if aead_decrypt(key, nonce, ct, tag, aad) {
+        Some(ct.clone())
+    } else {
+        None
+    }
+}
+
 /// Derive a symmetric key K = H( GT_element ) from the LV proof/digest.
-/// Concretely we hash the GT element produced by the main IIP equation rearranged.
-/// For simplicity we use: K_GT = (C ◦ w) / (v ◦ [y*^{-1}]_2).
+/// Note: This is kept for backward compatibility but production WE should use the header-based approach.
 pub fn derive_key_from_lv(dg: &IIPDigest, pi: &IIPProof) -> [u8;32] {
     let c_w = <Bn254 as Pairing>::pairing(dg.C, pi.w_tau_2);
     let y_inv = dg.y_star.inverse().unwrap();
@@ -89,4 +196,3 @@ pub fn decrypt_with_lv(
         None
     }
 }
-
