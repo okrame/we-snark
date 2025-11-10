@@ -41,7 +41,7 @@ fn main() {
     let dg = LVDigest { iip: iip_vk, one_idx: 3 };
     let pi = LVProof { iip: iip_pi, nz: nz_pi };
 
-    // --- Derive key from LV (what decryptor will do) ---
+    // --- Derive key from LV ---
     let key = derive_key_from_lv(&dg.iip, &pi.iip);
     let mut msg = b"hello, LV world".to_vec();
     let nonce: [u8;12] = rng.random();
@@ -57,7 +57,7 @@ fn main() {
 
     // --- Decrypt using witness (x,y) that satisfies x*y=z ---
     let mut ct = msg.clone();
-    let maybe_pt = decrypt_with_lv(&dg, &pi, nonce, &mut ct, &tag, b"AAD");
+    let maybe_pt = decrypt_with_lv(&crs, &dg, &pi, nonce, &mut ct, &tag, b"AAD");
     match maybe_pt {
         Some(pt) => println!("Decryption OK: {}", String::from_utf8_lossy(&pt)),
         None => println!("Decryption failed"),

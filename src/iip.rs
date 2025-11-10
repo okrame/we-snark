@@ -1,12 +1,15 @@
+//src/iip.rs
 use ark_bn254::{Bn254, Fr, G1Projective, G2Projective};
-use ark_ec::pairing::{Pairing, PairingOutput};
-use ark_ec::CurveGroup;
-use ark_ff::{Field, Zero, One};
-use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
+use ark_ec::pairing::{Pairing};
+use ark_ec::PrimeGroup;
+use ark_ff::{Field, Zero, One, PrimeField};
+use ark_poly::{univariate::DensePolynomial, Polynomial, DenseUVPolynomial};
 
 use crate::scs::CRS;
 
 /// Public digest (vk) for IIP, as in Construction 6.
+#[allow(non_snake_case)]
+#[allow(dead_code)]
 pub struct IIPDigest {
     pub x_star: Fr,                // we use 0
     pub y_star: Fr,                // 1/n
@@ -18,7 +21,7 @@ pub struct IIPDigest {
     pub n: usize,
     pub N: usize,
 }
-
+#[allow(non_snake_case)]
 pub struct IIPProof {
     pub w_tau_2: G2Projective,     // [B(τ)]_2 = SCS(G2).Commit(w)
     pub v_g1: G1Projective,        // v = Σ w_i [s_i]_1
@@ -29,6 +32,7 @@ pub struct IIPProof {
 }
 
 /// Build vk for IIP given public index s in F^n
+#[allow(non_snake_case)]
 pub fn iip_digest(crs: &CRS, s: &[Fr]) -> IIPDigest {
     assert_eq!(s.len(), crs.n);
     // A(X) interpolates s over D
@@ -56,6 +60,7 @@ pub fn iip_digest(crs: &CRS, s: &[Fr]) -> IIPDigest {
 }
 
 /// Prover: compute B(X), v, Q_X, Q_Z, and the “hatted” terms.
+#[allow(non_snake_case)]
 pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     assert_eq!(s.len(), crs.n);
     assert_eq!(w.len(), crs.n);
@@ -134,33 +139,55 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
 // c6 = e(v_g1, tau_N_2)
 // c7 = e(v_hat_tau_1, g2)
 // (NonZero adds c8,c9 in nonzero.rs)
+#[allow(non_snake_case)]
 pub fn iip_verify(d: &IIPDigest, pi: &IIPProof) -> bool {
     // 1) C ◦ w = v ◦ [y*^{-1}]_2 + [QX(τ)]_1 ◦ [τ - x*]_2 + [QZ(τ)]_1 ◦ Z
     let lhs1 = <Bn254 as Pairing>::pairing(d.C, pi.w_tau_2);
-    let mut rhs1 = <Bn254 as Pairing>::pairing(pi.v_g1, d.tau_N_2); // temp misuse to store GT
-    // fix rhs1 to v ◦ [y*^{-1}]_2
+
+    // v ◦ [y*^{-1}]_2
     let y_inv = d.y_star.inverse().unwrap();
     let v_g1_scaled = pi.v_g1.mul_bigint(y_inv.into_bigint());
-    rhs1 = <Bn254 as Pairing>::pairing(v_g1_scaled, <Bn254 as Pairing>::G2::generator());
+    let rhs1_v = <Bn254 as Pairing>::pairing(
+        v_g1_scaled,
+        <Bn254 as Pairing>::G2::generator(),
+    );
 
-    let term_qx = <Bn254 as Pairing>::pairing(pi.QX_tau_1, d.tau_2); // [τ - 0]_2 = [τ]_2
+    // [QX(τ)]_1 ◦ [τ - x*]_2, and we have x* = 0 ⇒ [τ - x*]_2 = [τ]_2
+    let term_qx = <Bn254 as Pairing>::pairing(pi.QX_tau_1, d.tau_2);
+
+    // [QZ(τ)]_1 ◦ Z
     let term_qz = <Bn254 as Pairing>::pairing(pi.QZ_tau_1, d.Z_tau_2);
-    let rhs1_total = rhs1 * term_qx * term_qz;
 
-    if lhs1 != rhs1_total { return false; }
+    // Multiply underlying GT elements (Fq12) and wrap back into PairingOutput
+    let rhs1_total = rhs1_v + term_qx + term_qz;
+
+    if lhs1 != rhs1_total {
+        return false;
+    }
 
     // 2) [QX(τ)]_1 ◦ [τ^{N-n+2}]_2 = [Q̂X(τ)]_1 ◦ [1]_2
     let lhs2 = <Bn254 as Pairing>::pairing(pi.QX_tau_1, d.tau_N_minus_n_plus_2_2);
-    let rhs2 = <Bn254 as Pairing>::pairing(pi.QX_hat_tau_1, <Bn254 as Pairing>::G2::generator());
-    if lhs2 != rhs2 { return false; }
+    let rhs2 = <Bn254 as Pairing>::pairing(
+        pi.QX_hat_tau_1,
+        <Bn254 as Pairing>::G2::generator(),
+    );
+    if lhs2 != rhs2 {
+        return false;
+    }
 
     // 3) v ◦ [τ^N]_2 = [v̂(τ)]_1 ◦ [1]_2
     let lhs3 = <Bn254 as Pairing>::pairing(pi.v_g1, d.tau_N_2);
-    let rhs3 = <Bn254 as Pairing>::pairing(pi.v_hat_tau_1, <Bn254 as Pairing>::G2::generator());
-    if lhs3 != rhs3 { return false; }
+    let rhs3 = <Bn254 as Pairing>::pairing(
+        pi.v_hat_tau_1,
+        <Bn254 as Pairing>::G2::generator(),
+    );
+    if lhs3 != rhs3 {
+        return false;
+    }
 
     true
 }
+
 
 // ------- small polynomial helpers -------
 
@@ -170,7 +197,7 @@ fn add_constant(p: &DensePolynomial<Fr>, c: Fr) -> DensePolynomial<Fr> {
     DensePolynomial::from_coefficients_vec(v)
 }
 fn sub_poly(a: &DensePolynomial<Fr>, b: &DensePolynomial<Fr>) -> DensePolynomial<Fr> {
-    DensePolynomial::from_coefficients_vec(ark_poly::polynomial::univariate::DenseOrSparsePolynomial::from(a.clone()).sub(b.clone()).coeffs().to_vec())
+    DensePolynomial::from_coefficients_vec((a - b).coeffs().to_vec())
 }
 fn scale_poly(p: &DensePolynomial<Fr>, c: Fr) -> DensePolynomial<Fr> {
     DensePolynomial::from_coefficients_vec(p.coeffs().iter().map(|x| *x * c).collect())
