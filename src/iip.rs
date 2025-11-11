@@ -111,7 +111,7 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     // 3) Now R is divisible by (X - x*), define QX = R / (X - x*)
     let lin = DensePolynomial::from_coefficients_vec(vec![-x_star, Fr::one()]);
     let (QX, rem) = CRS::div_rem(&R, &lin);
-    debug_assert!(rem.degree() == 0 && rem.coeffs()[0].is_zero());
+    debug_assert!(rem.is_zero(), "R(X) not divisible by (X - x*)");
 
     // Hatted polynomials:
     // Q̂_X(X) = X^{N-n+2} Q_X(X)
@@ -187,7 +187,11 @@ pub fn iip_verify(d: &IIPDigest, pi: &IIPProof) -> bool {
 
 fn add_constant(p: &DensePolynomial<Fr>, c: Fr) -> DensePolynomial<Fr> {
     let mut v = p.coeffs().to_vec();
-    v[0] += c;
+    if v.is_empty() {
+        v.push(c);
+    } else {
+        v[0] += c;
+    }
     DensePolynomial::from_coefficients_vec(v)
 }
 fn sub_poly(a: &DensePolynomial<Fr>, b: &DensePolynomial<Fr>) -> DensePolynomial<Fr> {
