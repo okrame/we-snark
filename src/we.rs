@@ -47,19 +47,82 @@ fn derive_alphas(shape: &LVShape, r: &[Fr]) -> [Fr; LV_NUM_COORDS] {
     alpha
 }
 
-fn kdf_from_gt(gt: &Fq12) -> [u8; 32] {
-    let mut bytes = Vec::new();
-    gt.serialize_compressed(&mut bytes).unwrap();
-    let digest = Sha256::digest(&bytes);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest);
-    out
+fn kdf_from_gt_with_ctx(gt: &Fq12, hdr: &LVHeader, crs: &CRS, shape: &LVShape) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    
+    // 1) GT element
+    let mut gt_bytes = Vec::new();
+    gt.serialize_compressed(&mut gt_bytes).unwrap();
+    hasher.update(&gt_bytes);
+    
+    // 2) CRS context
+    hasher.update(&crs.n.to_le_bytes());
+    hasher.update(&crs.N.to_le_bytes());
+    
+    // 3) Shape matrix
+    for i in 0..shape.rows {
+        for j in 0..LV_NUM_COORDS {
+            hasher.update(&[shape.a[i][j] as u8]);
+        }
+    }
+    for i in 0..shape.rows {
+        let mut b_bytes = Vec::new();
+        shape.b[i].serialize_compressed(&mut b_bytes).unwrap();
+        hasher.update(&b_bytes);
+    }
+    
+    // 4) Header elements
+    for elem in &hdr.c1 {
+        let mut bytes = Vec::new();
+        match elem {
+            HeaderElem::G1(g) => g.serialize_compressed(&mut bytes).unwrap(),
+            HeaderElem::G2(g) => g.serialize_compressed(&mut bytes).unwrap(),
+        }
+        hasher.update(&bytes);
+    }
+    
+    let digest = hasher.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&digest);
+    key
+}
+
+// binding to ct
+fn compute_aad(crs: &CRS, shape: &LVShape, hdr: &LVHeader) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    
+    hasher.update(&crs.n.to_le_bytes());
+    hasher.update(&crs.N.to_le_bytes());
+    
+    for i in 0..shape.rows {
+        for j in 0..LV_NUM_COORDS {
+            hasher.update(&[shape.a[i][j] as u8]);
+        }
+    }
+    
+    for i in 0..shape.rows {
+        let mut b_bytes = Vec::new();
+        shape.b[i].serialize_compressed(&mut b_bytes).unwrap();
+        hasher.update(&b_bytes);
+    }
+    
+    for elem in &hdr.c1 {
+        let mut bytes = Vec::new();
+        match elem {
+            HeaderElem::G1(g) => g.serialize_compressed(&mut bytes).unwrap(),
+            HeaderElem::G2(g) => g.serialize_compressed(&mut bytes).unwrap(),
+        }
+        hasher.update(&bytes);
+    }
+    
+    hasher.finalize().to_vec()
 }
 
 /// Encryptor: sample r (kept secret), compute ct1 = s·A in groups, return (header, key=H(s·b))
 #[allow(non_snake_case)]
 pub fn lv_make_header<R: Rng + ?Sized>(
     params: &LVPublicLinearParams,
+    crs: &CRS,
     rng: &mut R,
 ) -> (LVHeader, [u8; 32]) {
     let rows = params.shape.rows;
@@ -90,14 +153,16 @@ pub fn lv_make_header<R: Rng + ?Sized>(
         }
     }
 
-    // s·b in GT for KEM key (kept secret)
+    let hdr = LVHeader { c1 };
+
+    // s·b in GT for KEM key (kept secret), now with context binding
     let mut B = Fq12::one();
     for i in 0..rows {
         B *= params.shape.b[i].pow(r[i].into_bigint());
     }
-    let key = kdf_from_gt(&B);
+    let key = kdf_from_gt_with_ctx(&B, &hdr, crs, &params.shape);
 
-    (LVHeader { c1 }, key)
+    (hdr, key)
 }
 
 /// Decryptor: derive key by pairing ct1 with proof elements to compute s·b in GT
@@ -128,7 +193,7 @@ pub fn lv_key_from_header(
         }
     }
 
-    Some(kdf_from_gt(&acc))
+    Some(kdf_from_gt_with_ctx(&acc, hdr, crs, &params.shape))
 }
 
 pub fn decrypt_with_lv_header(
@@ -140,10 +205,10 @@ pub fn decrypt_with_lv_header(
     nonce: [u8; 12],
     ct: &mut Vec<u8>,
     tag: &[u8],
-    aad: &[u8],
 ) -> Option<Vec<u8>> {
     let key = lv_key_from_header(crs, dg, params, hdr, pi)?;
-    if aead_decrypt(key, nonce, ct, tag, aad) {
+    let aad = compute_aad(crs, &params.shape, hdr);
+    if aead_decrypt(key, nonce, ct, tag, &aad) {
         Some(ct.clone())
     } else {
         None
@@ -151,15 +216,18 @@ pub fn decrypt_with_lv_header(
 }
 
 pub fn aead_encrypt(
+    crs: &CRS,
+    shape: &LVShape,
+    hdr: &LVHeader,
     key: [u8; 32],
     nonce_12: [u8; 12],
     plaintext: &mut Vec<u8>,
-    aad: &[u8],
 ) -> Vec<u8> {
+    let aad = compute_aad(crs, shape, hdr);
     let cipher = Aes256Gcm::new(&key.into());
     let nonce = Nonce::clone_from_slice(&nonce_12);
     cipher
-        .encrypt_in_place_detached(&nonce, aad, plaintext)
+        .encrypt_in_place_detached(&nonce, &aad, plaintext)
         .unwrap()
         .to_vec()
 }

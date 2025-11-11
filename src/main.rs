@@ -43,20 +43,20 @@ fn main() {
 
     // --- Encryptor's public LV params and header (no witness needed) ---
     let params = we::lv_public_linear_params(&crs, &dg);
-    let (hdr, key_enc) = we::lv_make_header(&params, &mut rng);
+    let (hdr, key_enc) = we::lv_make_header(&params, &crs, &mut rng);
 
     println!("A_LV = {:?}", params.shape.a);
     println!("b_LV[3] = {:?}", params.shape.b[3]);
 
     // --- AEAD encrypt ---
-    let mut msg = b"hello, LV world".to_vec();
+    let mut msg = b"hello world".to_vec();
     let nonce: [u8; 12] = rng.random();
-    let tag: Vec<u8> = aead_encrypt(key_enc, nonce, &mut msg, b"AAD||LV");
+    let tag: Vec<u8> = aead_encrypt(&crs, &params.shape, &hdr, key_enc, nonce, &mut msg);
 
 
     // --- Decryptor derives key from π + header, then decrypt ---
     let mut ct: Vec<u8> = msg.clone(); // after aead.enc, msg is mutated to the ciphertext. so here we copy its bytes, not the original message.
-    let maybe_pt = decrypt_with_lv_header(&crs, &dg, &params, &hdr, &pi, nonce, &mut ct, &tag, b"AAD||LV");
+    let maybe_pt = decrypt_with_lv_header(&crs, &dg, &params, &hdr, &pi, nonce, &mut ct, &tag);
     match maybe_pt {
         Some(pt) => println!("Decryption OK: {}", String::from_utf8_lossy(&pt)),
         None => println!("Decryption failed"),
