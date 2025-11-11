@@ -225,7 +225,7 @@ pub fn aead_encrypt(
 ) -> Vec<u8> {
     let aad = compute_aad(crs, shape, hdr);
     let cipher = Aes256Gcm::new(&key.into());
-    let nonce = Nonce::clone_from_slice(&nonce_12);
+    let nonce: &Nonce<_> = (&nonce_12).into();
     cipher
         .encrypt_in_place_detached(&nonce, &aad, plaintext)
         .unwrap()
@@ -240,7 +240,7 @@ pub fn aead_decrypt(
     aad: &[u8],
 ) -> bool {
     let cipher = Aes256Gcm::new(&key.into());
-    let nonce = Nonce::clone_from_slice(&nonce_12);
+    let nonce: &Nonce<_> = (&nonce_12).into();
     cipher
         .decrypt_in_place_detached(&nonce, aad, ciphertext, tag.into())
         .is_ok()

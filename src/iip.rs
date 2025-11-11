@@ -39,9 +39,11 @@ pub fn iip_digest(crs: &CRS, s: &[Fr]) -> IIPDigest {
     let A = crs.interpolate(s);
     let A_coeffs = A.coeffs();
 
-    // C = y* · [A(τ)]_1
+    
     let A_tau_1 = crs.commit_poly_g1(A_coeffs);
-    let C = A_tau_1.mul_bigint(crs.n_inv.into_bigint());
+    //let C = A_tau_1.mul_bigint(crs.n_inv.into_bigint()); // this is the paper’s scaled variant we (Construction 6), we must refactor so that the pairing identity balances well.
+    let C = A_tau_1;
+    
 
     // [Z(τ)]_2 from precomputed coeffs
     let Z_tau_2 = crs.commit_poly_g2(&crs.vanishing_coeffs);
@@ -52,7 +54,8 @@ pub fn iip_digest(crs: &CRS, s: &[Fr]) -> IIPDigest {
         C,
         Z_tau_2,
         tau_2: crs.g2_tau_pow(1),
-        tau_N_minus_n_plus_2_2: crs.g2_tau_pow(crs.N - crs.n + 2),
+        tau_N_minus_n_plus_2_2: crs.g2_tau_pow(crs.N - crs.n + 1),
+        //tau_N_minus_n_plus_2_2: crs.g2_tau_pow(crs.N - crs.n + 2),
         tau_N_2: crs.g2_tau_pow(crs.N),
         n: crs.n,
         N: crs.N,
@@ -81,7 +84,10 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
 
     // P(X) = A(X)B(X) - (Σ w_i s_i)/y*
     let mut P = CRS::mul_poly(&A, &B);
-    let t = v_scalar * crs.n_inv; // t = <w,s>/y*
+    //let t = v_scalar * crs.n_inv.inverse().unwrap();  
+    //let t = v_scalar * crs.n_inv;  
+    let n_field = crs.n_inv.inverse().unwrap(); 
+    let t = v_scalar * n_field; 
     // subtract constant t
     let mut P_coeffs = P.coeffs().to_vec();
     if P_coeffs.is_empty() {
@@ -115,7 +121,9 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
 
     // Hatted polynomials:
     // Q̂_X(X) = X^{N-n+2} Q_X(X)
-    let QX_hat = mul_by_xk(&QX, (crs.N - crs.n + 2) as usize);
+    let QX_hat = mul_by_xk(&QX, (crs.N - crs.n + 1) as usize);
+    //let QX_hat = mul_by_xk(&QX, (crs.N - crs.n + 2) as usize);
+    
     // v̂(X) = X^N * (Σ w_i s_i)  (a pure monomial with that coefficient)
     let mut vhat_coeffs = vec![Fr::zero(); crs.N + 1];
     vhat_coeffs[crs.N] = v_scalar;

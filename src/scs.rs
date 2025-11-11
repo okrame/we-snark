@@ -61,8 +61,17 @@ impl CRS {
 
     /// Commit polynomial in G1: returns [F(τ)]_1 = Σ f_j [τ^j]_1
     pub fn commit_poly_g1(&self, coeffs: &[Fr]) -> G1Projective {
+        // find last non-zero
+        let max = coeffs.iter().rposition(|c| !c.is_zero()).unwrap_or(0);
+        assert!(
+            max <= self.N,
+            "commit_poly_g1: deg={} exceeds CRS.N={}",
+            max,
+            self.N
+        );
         coeffs
             .iter()
+            .take(max + 1)
             .enumerate()
             .fold(G1Projective::zero(), |acc, (j, c)| {
                 if c.is_zero() {
@@ -72,11 +81,18 @@ impl CRS {
                 }
             })
     }
-
     /// Commit polynomial in G2: returns [F(τ)]_2 = Σ f_j [τ^j]_2
     pub fn commit_poly_g2(&self, coeffs: &[Fr]) -> G2Projective {
+        let max = coeffs.iter().rposition(|c| !c.is_zero()).unwrap_or(0);
+        assert!(
+            max <= self.N,
+            "commit_poly_g2: deg={} exceeds CRS.N={}",
+            max,
+            self.N
+        );
         coeffs
             .iter()
+            .take(max + 1)
             .enumerate()
             .fold(G2Projective::zero(), |acc, (j, c)| {
                 if c.is_zero() {

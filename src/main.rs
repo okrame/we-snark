@@ -8,9 +8,9 @@ use ark_bn254::Fr;
 use rand::{rng, Rng};
 
 use scs::CRS;
-use iip::{iip_digest, iip_prove};
+use iip::{iip_digest, iip_prove, iip_verify};
 use nonzero::nonzero_prove;
-use verifier::{LVDigest, LVProof};
+use verifier::{LVDigest, LVProof, lv_verify};
 use we::{aead_encrypt, decrypt_with_lv_header};
 
 fn main() {
