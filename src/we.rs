@@ -1,14 +1,12 @@
 //src/we.rs
 use aes_gcm::{AeadInPlace, Aes256Gcm, KeyInit, Nonce};
 use sha2::{Digest, Sha256};
-use ark_ff::{Field, PrimeField, UniformRand, Zero, One};
-use ark_bn254::{Bn254, Fr, Fq12};
-use ark_ec::{pairing::Pairing, PrimeGroup};
+use ark_ff::{Field, PrimeField, Zero, One};
+use ark_bn254::{Fr, Fq12};
 use ark_serialize::CanonicalSerialize;
 use rand::Rng;
 use crate::verifier::{LVDigest, LVProof, LVShape, LV_NUM_COORDS};
 use crate::scs::CRS;
-use crate::iip::{IIPDigest, IIPProof};
 
 /// LV header containing random linear combination coefficients
 #[derive(Clone)]
@@ -130,24 +128,6 @@ pub fn decrypt_with_lv_header(
     }
 }
 
-/// Derive a symmetric key K = H( GT_element ) from the LV proof/digest.
-/// Note: This is kept for backward compatibility but production WE should use the header-based approach.
-pub fn derive_key_from_lv(dg: &IIPDigest, pi: &IIPProof) -> [u8;32] {
-    let c_w = <Bn254 as Pairing>::pairing(dg.C, pi.w_tau_2);
-    let y_inv = dg.y_star.inverse().unwrap();
-    let v_scaled = pi.v_g1.mul_bigint(y_inv.into_bigint());
-    let v_term = <Bn254 as Pairing>::pairing(v_scaled, <Bn254 as Pairing>::G2::generator());
-    
-    let k_gt = c_w.0 * v_term.0.inverse().unwrap();
-
-    let mut bytes = Vec::new();
-    k_gt.serialize_compressed(&mut bytes).unwrap();
-    let key = Sha256::digest(&bytes);
-    let mut out = [0u8;32];
-    out.copy_from_slice(&key);
-    out
-}
-
 pub fn aead_encrypt(
     key: [u8; 32],
     nonce_12: [u8; 12],
@@ -174,25 +154,4 @@ pub fn aead_decrypt(
     cipher
         .decrypt_in_place_detached(&nonce, aad, ciphertext, tag.into())
         .is_ok()
-}
-
-/// Wrapper 
-pub fn decrypt_with_lv(
-    crs: &CRS,
-    dg: &LVDigest,
-    pi: &LVProof,
-    nonce: [u8; 12],
-    ct: &mut Vec<u8>,
-    tag: &[u8],
-    aad: &[u8],
-) -> Option<Vec<u8>> {
-    if !crate::verifier::lv_verify(crs, dg, pi) {
-        return None;
-    }
-    let k = derive_key_from_lv(&dg.iip, &pi.iip);
-    if aead_decrypt(k, nonce, ct, tag, aad) {
-        Some(ct.clone())
-    } else {
-        None
-    }
 }
