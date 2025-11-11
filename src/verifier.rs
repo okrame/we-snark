@@ -2,15 +2,25 @@
 use crate::iip::{IIPDigest, IIPProof, iip_verify};
 use crate::nonzero::{NonZeroProof, nonzero_verify};
 use crate::scs::CRS;
-use ark_bn254::{Bn254, Fq12};
+use ark_bn254::{Bn254, Fq12, G1Projective as G1, G2Projective as G2};
 use ark_ec::pairing::Pairing;
 use ark_ec::PrimeGroup;
 use ark_ff::Field;
 use ark_ff::One;
 use ark_ff::PrimeField;
-use ark_poly::{
-    EvaluationDomain
-};
+use ark_poly::EvaluationDomain;
+
+#[derive(Clone, Copy)]
+pub enum ColSide { ProofG1PublicG2, ProofG2PublicG1 }
+
+#[derive(Clone)]
+pub struct LVColMeta {
+    pub side: ColSide,
+    pub g1_pub: Option<G1>,
+    pub g2_pub: Option<G2>,
+}
+
+pub enum ProofElem { G1(G1), G2(G2) }
 
 pub struct LVDigest {
     pub iip: IIPDigest,
@@ -47,6 +57,27 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     Some(LVCoords([c0,c1,c2,c3,c4,c5,c6,c7,c8,c9]))
 }
 
+/// Collect proof-side elements per column (G1 or G2), matching column order
+pub(crate) fn build_proof_side_elems(crs: &CRS, dg: &LVDigest, pi: &LVProof)
+    -> Option<[ProofElem; LV_NUM_COORDS]>
+{
+    if pi.iip.w_tau_2 != pi.nz.w_tau_2 { return None; }
+
+    let y_inv = dg.iip.y_star.inverse().unwrap();
+
+    Some([
+        ProofElem::G2(pi.iip.w_tau_2),
+        ProofElem::G1(pi.iip.v_g1.mul_bigint(y_inv.into_bigint())),
+        ProofElem::G1(pi.iip.QX_tau_1),
+        ProofElem::G1(pi.iip.QZ_tau_1),
+        ProofElem::G1(pi.iip.QX_tau_1),
+        ProofElem::G1(pi.iip.QX_hat_tau_1),
+        ProofElem::G1(pi.iip.v_g1),
+        ProofElem::G1(pi.iip.v_hat_tau_1),
+        ProofElem::G2(pi.nz.w_tau_2),
+        ProofElem::G1(pi.nz.q0_tau_1),
+    ])
+}
 
 pub struct LVProof {
     pub iip: IIPProof,
@@ -67,7 +98,7 @@ pub struct LVShape {
 
 impl LVDigest {
     /// Build the A_LV and b_LV used by the LV verifier, in the abstract
-    /// GT-coordinate basis c_0..c_9 described in the documentation.
+    /// GT-coordinate basis c_0..c_9 
     pub fn linear_shape(&self, crs: &CRS) -> LVShape {
         let rows = 4;
 
@@ -96,6 +127,37 @@ impl LVDigest {
         let b = [gt_one.clone(), gt_one.clone(), gt_one.clone(), gt_const];
 
         LVShape { rows, a, b }
+    }
+
+    /// Map each column to its public base and orientation
+    pub fn column_metadata(&self, crs: &CRS) -> [LVColMeta; LV_NUM_COORDS] {
+        let g1 = <Bn254 as Pairing>::G1::generator();
+        let g2 = <Bn254 as Pairing>::G2::generator();
+        let d = crs.domain.element(self.one_idx);
+        let tau_minus_d_2 = crs.g2_tau_pow(1) - g2.mul_bigint(d.into_bigint());
+
+        [
+            // c0 = e(C, w_tau_2): proof is G2, public base is G1 (C)
+            LVColMeta { side: ColSide::ProofG2PublicG1, g1_pub: Some(self.iip.C), g2_pub: None },
+            // c1 = e(v_g1 * y_inv, g2): proof is G1, public base is g2
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c2 = e(QX_tau_1, tau_2): proof G1, public G2
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.iip.tau_2) },
+            // c3 = e(QZ_tau_1, Z_tau_2): proof G1, public G2
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.iip.Z_tau_2) },
+            // c4 = e(QX_tau_1, tau_{N-n+2,2})
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.iip.tau_N_minus_n_plus_2_2) },
+            // c5 = e(QX_hat_tau_1, g2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c6 = e(v_g1, tau_N_2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.iip.tau_N_2) },
+            // c7 = e(v_hat_tau_1, g2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c8 = e(g1, w_tau_2): proof G2, public G1
+            LVColMeta { side: ColSide::ProofG2PublicG1, g1_pub: Some(g1), g2_pub: None },
+            // c9 = e(q0_tau_1, (tau - d)_2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(tau_minus_d_2) },
+        ]
     }
 }
 
