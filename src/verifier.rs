@@ -61,9 +61,15 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     let c12 = <Bn254 as Pairing>::pairing(pi.a_tau_1, g2).0; // optional
     let c13 = <Bn254 as Pairing>::pairing(pi.c_tau_1, g2).0; // optional
 
+    // C–z binding coordinates:
+    // c14 = e(v_g1, g2), where v_g1 = z from IIP selector s = [0,0,1,0]
+    // c15 = e(C(τ)_1, g2), where C(X) = z is the QAP output polynomial
+    let c14 = <Bn254 as Pairing>::pairing(pi.iip.v_g1, g2).0;
+    let c15 = <Bn254 as Pairing>::pairing(pi.c_tau_1, g2).0;
+
     Some(LVCoords([
     c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,
-    c10,c11,c12,c13,
+    c10,c11,c12,c13,c14,c15,
 ]))
 }
 
@@ -86,10 +92,14 @@ pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
         ProofElem::G1(pi.iip.v_hat_tau_1),
         ProofElem::G2(pi.nz.w_tau_2),
         ProofElem::G1(pi.nz.q0_tau_1),
+        // Mul gadget (P,H,A,C)
         ProofElem::G1(pi.p_tau_1),
         ProofElem::G1(pi.h_tau_1),
         ProofElem::G1(pi.a_tau_1),
-        ProofElem::G1(pi.c_tau_1), 
+        ProofElem::G1(pi.c_tau_1),
+        // C–z binding reuses v_g1 and C(τ)_1
+        ProofElem::G1(pi.iip.v_g1),
+        ProofElem::G1(pi.c_tau_1),
     ])
 }
 
@@ -106,37 +116,46 @@ pub struct LVProof {
 }
 
 /// Number of GT-coordinates we use in A_LV · π = b_LV.
-pub const LV_NUM_COORDS: usize = 14;
+pub const LV_NUM_COORDS: usize = 16;
 
 /// A_LV and b_LV as described above.
 /// - a[i][j] ∈ {-1,0,1} describes exponent α_{i,j} on coordinate c_j in equation i.
 /// - b[i] ∈ GT is the RHS constant for equation i.
 pub struct LVShape {
     pub rows: usize,
-    pub a: [[i8; LV_NUM_COORDS]; 5], // here rows fixed, you can generalize later
-    pub b: [Fq12; 5],
+    pub a: [[i8; LV_NUM_COORDS]; 6], // here rows fixed, you can generalize later
+    pub b: [Fq12; 6],
 }
 
 impl LVDigest {
-    pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 5;
+        pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
+        let rows = 6;
 
-        let mut a = [[0i8; LV_NUM_COORDS]; 5];
+        let mut a = [[0i8; LV_NUM_COORDS]; 6];
 
         // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
-        a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0, 0, 0, 0, 0];
+        a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0,
+                 0,  0,  0,  0,  0,  0];
 
         // Eq 1: c4 * c5^{-1} = 1
-        a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0, 0, 0, 0, 0];
+        a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0,
+                 0,  0,  0,  0,  0,  0];
 
         // Eq 2: c6 * c7^{-1} = 1
-        a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0, 0, 0, 0, 0];
+        a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0,
+                 0,  0,  0,  0,  0,  0];
 
         // Eq 3: c8 * c9^{-1} = e(g1,g2)
-        a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1, 0, 0, 0, 0];
+        a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1,
+                 0,  0,  0,  0,  0,  0];
 
         // Eq 4 (Mul QAP): c10 * c11^{-1} = 1
-        a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 1, -1, 0, 0];
+        a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+                 1, -1,  0,  0,  0,  0];
+
+        // Eq 5 (C–z binding): c14 * c15^{-1} = 1
+        a[5] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+                 0,  0,  0,  0,  1, -1];
 
         let gt_one = Fq12::one();
         let gt_const: Fq12 = <Bn254 as Pairing>::pairing(
@@ -150,10 +169,12 @@ impl LVDigest {
             gt_one.clone(), // eq2
             gt_const,       // eq3
             gt_one.clone(), // eq4 (mul)
+            gt_one.clone(), // eq5 (C–z binding)
         ];
 
         LVShape { rows, a, b }
     }
+
 
     /// Map each column to its public base and orientation
     pub fn column_metadata(&self, crs: &CRS) -> [LVColMeta; LV_NUM_COORDS] {
@@ -190,6 +211,10 @@ impl LVDigest {
             // c12 = e(A_tau_1, g2) optional
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
             // c13 = e(C_tau_1, g2) optional
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c14 = e(v_g1, g2)  (z from IIP)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c15 = e(C_tau_1, g2)  (z from QAP C)
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
 
         ]
