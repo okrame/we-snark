@@ -1,14 +1,14 @@
 // src/mul_snark.rs
 
-use ark_bn254::{Bn254, Fr, G1Projective as G1, G2Projective as G2};
-use ark_ec::pairing::Pairing;
+use ark_bn254::{Bn254, Fr, G1Projective as G1};
 use ark_ec::PrimeGroup;
+use ark_ec::pairing::Pairing;
 use ark_ff::{One, Zero};
 use ark_poly::{DenseUVPolynomial, Polynomial, univariate::DensePolynomial};
 
-use crate::scs::CRS;
 use crate::iip::{iip_digest, iip_prove};
 use crate::nonzero::nonzero_prove;
+use crate::scs::CRS;
 use crate::verifier::{LVDigest, LVProof, lv_verify};
 
 /// Fixed-size MulCircuit witness: w = [x, y, z, 1].
@@ -62,7 +62,7 @@ pub struct MulQAPCommit {
     pub b_tau_1: G1,
     pub c_tau_1: G1,
     pub p_tau_1: G1,
-    pub z_tau_2: G2,
+    pub h_tau_1: G1,
 }
 
 /// Build QAP polynomials from the Mul witness w = [x,y,z,1].
@@ -96,7 +96,13 @@ fn build_mul_qap_polys(w: &MulWitness) -> MulQAPPolys {
     // Z(X) = X - 1
     let z_poly = DensePolynomial::from_coefficients_vec(vec![-Fr::one(), Fr::one()]);
 
-    MulQAPPolys { a, b, c, p, z: z_poly }
+    MulQAPPolys {
+        a,
+        b,
+        c,
+        p,
+        z: z_poly,
+    }
 }
 
 /// Commit the QAP polynomials with the SCS (KZG).
@@ -105,24 +111,30 @@ fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
     let b_tau_1 = crs.commit_poly_g1(polys.b.coeffs());
     let c_tau_1 = crs.commit_poly_g1(polys.c.coeffs());
     let p_tau_1 = crs.commit_poly_g1(polys.p.coeffs());
-    let z_tau_2 = crs.commit_poly_g2(polys.z.coeffs());
+
+    let h = compute_h_poly(crs, polys);
+    let h_tau_1 = crs.commit_poly_g1(h.coeffs());
 
     MulQAPCommit {
         a_tau_1,
         b_tau_1,
         c_tau_1,
         p_tau_1,
-        z_tau_2,
+        h_tau_1,
     }
 }
 
+fn compute_h_poly(_crs: &CRS, polys: &MulQAPPolys) -> DensePolynomial<Fr> {
+    // H(X) = P(X) / Z(X), with Z(X) = X - 1
+    let (h, r) = CRS::div_rem(&polys.p, &polys.z);
+    debug_assert!(
+        r.coeffs().iter().all(|c| c.is_zero()),
+        "Mul QAP: P(X) is not divisible by Z(X); bad witness"
+    );
+    h
+}
 
 impl MulDigest {
-    /// Setup MulCircuit for domain size n = 4 and public index s = [0,0,1,0].
-    ///
-    /// - slots are [x, y, z, 1]
-    /// - s selects the z-slot, so the public "output" is z
-    /// - one_idx = 3 enforces w[3] = 1 via the NonZero gadget + field check
     pub fn setup(crs: &CRS) -> Self {
         assert_eq!(
             crs.n, 4,
@@ -136,64 +148,58 @@ impl MulDigest {
             Fr::from(0u32),
         ];
 
+        // Z(X) = X - 1
+        let z_poly = DensePolynomial::from_coefficients_vec(vec![-Fr::one(), Fr::one()]);
+        let mul_z_tau_2 = crs.commit_poly_g2(z_poly.coeffs());
+
         let iip_vk = iip_digest(crs, &s);
         let lv = LVDigest {
             iip: iip_vk,
             one_idx: 3,
+            mul_z_tau_2,
         };
 
         MulDigest { lv, s }
     }
 }
 
+
 /// Prover for MulCircuit: given witness w = [x,y,z,1], build LV proof.
 ///
-/// NOTE: lv_verify will re-check x*y = z and w[3] = 1 at verification time.
-/// In debug builds, we also construct a tiny QAP-style view of the relation
-/// and KZG-commit its polynomials as a preparation for a future Mul gadget.
 pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
     let w_vec = w.to_vec();
 
     let iip_pi = iip_prove(crs, &dg.s, &w_vec);
     let nz_pi  = nonzero_prove(crs, &w_vec, dg.lv.one_idx);
 
-    // --- QAP sanity checks (debug only) ---
+    let polys   = build_mul_qap_polys(w);
+    let commits = commit_mul_qap(crs, &polys);
+
+    // Optional sanity checks
     #[cfg(debug_assertions)]
     {
-        let polys = build_mul_qap_polys(w);
-
-        // Check P(1) = 0 <=> x*y - z = 0 in the field.
+        // P(1) = 0
         let one = Fr::from(1u32);
         let p_at_1 = polys.p.evaluate(&one);
-        debug_assert!(
-            p_at_1.is_zero(),
-            "QAP check failed: P(1) != 0, so x*y != z"
-        );
+        debug_assert!(p_at_1.is_zero(), "QAP check failed: P(1) != 0");
 
-        // Commit the QAP polynomials with KZG (no LV integration yet).
-        let commits = commit_mul_qap(crs, &polys);
-
-        // Optional: check at group level that P(X) is the zero polynomial
-        // when x*y=z. Since P(X) is constant, P(X)=0 <=> [P(τ)]_1 is identity.
-        let gt_p = <Bn254 as Pairing>::pairing(
-            commits.p_tau_1,
-            <Bn254 as Pairing>::G2::generator(),
-        );
+        // If x*y=z, P(X) is the zero polynomial -> [P(τ)]_1 = identity
+        let gt_p =
+            <Bn254 as Pairing>::pairing(commits.p_tau_1, <Bn254 as Pairing>::G2::generator());
         debug_assert!(
             gt_p.0.is_one(),
-            "QAP group check failed: [P(τ)]_1 is not the identity when x*y=z"
+            "QAP GT check failed: [P(τ)]_1 not identity when x*y=z"
         );
-
-        // We intentionally do NOT store these commitments in LVProof yet.
-        // They will be used later when we extend LV_NUM_COORDS with a
-        // dedicated Mul gadget.
-        let _ = commits; // silence unused warning in debug
     }
 
     let lv = LVProof {
         iip: iip_pi,
         nz:  nz_pi,
         w:   w_vec,
+        p_tau_1: commits.p_tau_1,
+        h_tau_1: commits.h_tau_1,
+        a_tau_1: commits.a_tau_1,
+        c_tau_1: commits.c_tau_1,
     };
 
     MulProof { lv }

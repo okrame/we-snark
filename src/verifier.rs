@@ -26,6 +26,7 @@ pub enum ProofElem { G1(G1), G2(G2) }
 pub struct LVDigest {
     pub iip: IIPDigest,
     pub one_idx: usize,
+    pub mul_z_tau_2: G2,
 }
 
 pub struct LVCoords(pub [Fq12; LV_NUM_COORDS]);
@@ -43,7 +44,7 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     let d = crs.domain.element(dg.one_idx);
     let tau_minus_d_2 = crs.g2_tau_pow(1) - g2.mul_bigint(d.into_bigint());
 
-    // Fill the 10 coordinates (PairingOutputs turned into Fq12)
+    // Fill the coordinates (PairingOutputs turned into Fq12)
     let c0 = <Bn254 as Pairing>::pairing(dg.iip.C,                pi.iip.w_tau_2).0;
     let c1 = <Bn254 as Pairing>::pairing(pi.iip.v_g1.mul_bigint(y_inv.into_bigint()), g2).0;
     let c2 = <Bn254 as Pairing>::pairing(pi.iip.QX_tau_1,         dg.iip.tau_2).0;
@@ -54,8 +55,16 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     let c7 = <Bn254 as Pairing>::pairing(pi.iip.v_hat_tau_1,      g2).0;
     let c8 = <Bn254 as Pairing>::pairing(g1,                      pi.nz.w_tau_2).0;
     let c9 = <Bn254 as Pairing>::pairing(pi.nz.q0_tau_1,          tau_minus_d_2).0;
+    // Mul-gadget coordinates
+    let c10 = <Bn254 as Pairing>::pairing(pi.p_tau_1, g2).0;
+    let c11 = <Bn254 as Pairing>::pairing(pi.h_tau_1, dg.mul_z_tau_2).0;
+    let c12 = <Bn254 as Pairing>::pairing(pi.a_tau_1, g2).0; // optional
+    let c13 = <Bn254 as Pairing>::pairing(pi.c_tau_1, g2).0; // optional
 
-    Some(LVCoords([c0,c1,c2,c3,c4,c5,c6,c7,c8,c9]))
+    Some(LVCoords([
+    c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,
+    c10,c11,c12,c13,
+]))
 }
 
 /// Collect proof-side elements per column (G1 or G2), matching column order
@@ -77,6 +86,10 @@ pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
         ProofElem::G1(pi.iip.v_hat_tau_1),
         ProofElem::G2(pi.nz.w_tau_2),
         ProofElem::G1(pi.nz.q0_tau_1),
+        ProofElem::G1(pi.p_tau_1),
+        ProofElem::G1(pi.h_tau_1),
+        ProofElem::G1(pi.a_tau_1),
+        ProofElem::G1(pi.c_tau_1), 
     ])
 }
 
@@ -85,49 +98,59 @@ pub struct LVProof {
     pub iip: IIPProof,
     pub nz: NonZeroProof,
     pub w: Vec<Fr>,
+    // Mul-gadget commitments
+    pub p_tau_1: G1,
+    pub h_tau_1: G1,
+    pub a_tau_1: G1,
+    pub c_tau_1: G1,
 }
 
 /// Number of GT-coordinates we use in A_LV · π = b_LV.
-pub const LV_NUM_COORDS: usize = 10;
+pub const LV_NUM_COORDS: usize = 14;
 
 /// A_LV and b_LV as described above.
 /// - a[i][j] ∈ {-1,0,1} describes exponent α_{i,j} on coordinate c_j in equation i.
 /// - b[i] ∈ GT is the RHS constant for equation i.
 pub struct LVShape {
     pub rows: usize,
-    pub a: [[i8; LV_NUM_COORDS]; 4], // here rows=4 fixed, you can generalize later
-    pub b: [Fq12; 4],
+    pub a: [[i8; LV_NUM_COORDS]; 5], // here rows fixed, you can generalize later
+    pub b: [Fq12; 5],
 }
 
 impl LVDigest {
-    /// Build the A_LV and b_LV used by the LV verifier, in the abstract
-    /// GT-coordinate basis c_0..c_9 
     pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 4;
+        let rows = 5;
 
-        // Matrix A_LV: fill explicitly with the α_{i,j} above.
-        let mut a = [[0i8; LV_NUM_COORDS]; 4];
+        let mut a = [[0i8; LV_NUM_COORDS]; 5];
 
         // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
-        a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0];
+        a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0, 0, 0, 0, 0];
 
         // Eq 1: c4 * c5^{-1} = 1
-        a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0];
+        a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0, 0, 0, 0, 0];
 
         // Eq 2: c6 * c7^{-1} = 1
-        a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0];
+        a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0, 0, 0, 0, 0];
 
         // Eq 3: c8 * c9^{-1} = e(g1,g2)
-        a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1];
+        a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1, 0, 0, 0, 0];
 
-        // b_LV: all 1 except the last, which is e(g1,g2)
+        // Eq 4 (Mul QAP): c10 * c11^{-1} = 1
+        a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 1, -1, 0, 0];
+
         let gt_one = Fq12::one();
         let gt_const: Fq12 = <Bn254 as Pairing>::pairing(
             <Bn254 as Pairing>::G1::generator(),
             <Bn254 as Pairing>::G2::generator(),
         ).0;
 
-        let b = [gt_one.clone(), gt_one.clone(), gt_one.clone(), gt_const];
+        let b = [
+            gt_one.clone(), // eq0
+            gt_one.clone(), // eq1
+            gt_one.clone(), // eq2
+            gt_const,       // eq3
+            gt_one.clone(), // eq4 (mul)
+        ];
 
         LVShape { rows, a, b }
     }
@@ -160,6 +183,15 @@ impl LVDigest {
             LVColMeta { side: ColSide::ProofG2PublicG1, g1_pub: Some(g1), g2_pub: None },
             // c9 = e(q0_tau_1, (tau - d)_2)
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(tau_minus_d_2) },
+            // c10 = e(P_tau_1, g2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c11 = e(H_tau_1, Z_tau_2)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.mul_z_tau_2) },
+            // c12 = e(A_tau_1, g2) optional
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+            // c13 = e(C_tau_1, g2) optional
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+
         ]
     }
 }
