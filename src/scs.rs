@@ -136,7 +136,7 @@ impl CRS {
     }
 
     /// Convenience: [τ^k]_1 in G1
-    pub fn g1_tau_pow(&self, k: usize) -> G1Projective {
+    pub fn _g1_tau_pow(&self, k: usize) -> G1Projective {
         self.g1_pows[k]
     }
 }

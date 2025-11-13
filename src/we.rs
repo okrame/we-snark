@@ -11,10 +11,10 @@ use crate::verifier::{LVDigest, LVProof, LVShape, LV_NUM_COORDS, LVColMeta, ColS
 use crate::scs::CRS;
 
 /// LV header containing ct1 = s·A in source groups
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum HeaderElem { G1(G1), G2(G2) }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LVHeader {
     pub c1: Vec<HeaderElem>,
 }

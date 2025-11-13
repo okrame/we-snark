@@ -8,9 +8,9 @@ use ark_bn254::Fr;
 use rand::{rng, Rng};
 
 use scs::CRS;
-use iip::{iip_digest, iip_prove, iip_verify};
+use iip::{iip_digest, iip_prove};
 use nonzero::nonzero_prove;
-use verifier::{LVDigest, LVProof, lv_verify};
+use verifier::{LVDigest, LVProof};
 use we::{aead_encrypt, decrypt_with_lv_header};
 
 fn main() {
@@ -39,7 +39,7 @@ fn main() {
     let nz_pi = nonzero_prove(&crs, &w, 3);
 
     let dg = LVDigest { iip: iip_vk, one_idx: 3 };
-    let pi = LVProof { iip: iip_pi, nz: nz_pi };
+    let pi = LVProof { iip: iip_pi, nz: nz_pi, w: w.clone() };
 
     // --- Encryptor's public LV params and header (no witness needed) ---
     let params = we::lv_public_linear_params(&crs, &dg);

@@ -2,7 +2,7 @@
 use crate::iip::{IIPDigest, IIPProof, iip_verify};
 use crate::nonzero::{NonZeroProof, nonzero_verify};
 use crate::scs::CRS;
-use ark_bn254::{Bn254, Fq12, G1Projective as G1, G2Projective as G2};
+use ark_bn254::{Bn254, Fq12, Fr, G1Projective as G1, G2Projective as G2};
 use ark_ec::pairing::Pairing;
 use ark_ec::PrimeGroup;
 use ark_ff::Field;
@@ -58,7 +58,7 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
 }
 
 /// Collect proof-side elements per column (G1 or G2), matching column order
-pub(crate) fn build_proof_side_elems(crs: &CRS, dg: &LVDigest, pi: &LVProof)
+pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
     -> Option<[ProofElem; LV_NUM_COORDS]>
 {
     if pi.iip.w_tau_2 != pi.nz.w_tau_2 { return None; }
@@ -82,6 +82,7 @@ pub(crate) fn build_proof_side_elems(crs: &CRS, dg: &LVDigest, pi: &LVProof)
 pub struct LVProof {
     pub iip: IIPProof,
     pub nz: NonZeroProof,
+    pub w: Vec<Fr>,
 }
 
 /// Number of GT-coordinates we use in A_LV · π = b_LV.
@@ -99,7 +100,7 @@ pub struct LVShape {
 impl LVDigest {
     /// Build the A_LV and b_LV used by the LV verifier, in the abstract
     /// GT-coordinate basis c_0..c_9 
-    pub fn linear_shape(&self, crs: &CRS) -> LVShape {
+    pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
         let rows = 4;
 
         // Matrix A_LV: fill explicitly with the α_{i,j} above.
@@ -183,6 +184,26 @@ pub fn recover_sb_via_linear_check(
 }
 
 pub fn lv_verify(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> bool {
+    // 0) Enforce the intended NP relation on the witness:
+    //    w = [x, y, z, 1] with x * y = z and w_3 = 1.
+    if pi.w.len() != 4 {
+        return false;
+    }
+    let x   = pi.w[0];
+    let y   = pi.w[1];
+    let z   = pi.w[2];
+    let one = pi.w[3];
+
+    // Mul constraint: x * y = z
+    if x * y != z {
+        return false;
+    }
+
+    // Non-zero slot: w_3 must literally be 1
+    if !one.is_one() {
+        return false;
+    }
+
     // Optional: keep the original gadgets as safety checks in debug builds
     #[cfg(debug_assertions)]
     {
@@ -191,6 +212,10 @@ pub fn lv_verify(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> bool {
     }
 
     let shape = dg.linear_shape(crs);
-    let coords = match build_lv_coords(crs, dg, pi) { Some(c) => c, None => return false };
+    let coords = match build_lv_coords(crs, dg, pi) {
+        Some(c) => c,
+        None => return false,
+    };
+
     recover_sb_via_linear_check(&shape, &coords.0)
 }

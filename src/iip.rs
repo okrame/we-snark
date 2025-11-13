@@ -120,7 +120,7 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     debug_assert!(rem.is_zero(), "R(X) not divisible by (X - x*)");
 
     // Hatted polynomials:
-    // Q̂_X(X) = X^{N-n+2} Q_X(X)
+    // Q̂_X(X) = X^{N-n+1} Q_X(X)
     let QX_hat = mul_by_xk(&QX, (crs.N - crs.n + 1) as usize);
     //let QX_hat = mul_by_xk(&QX, (crs.N - crs.n + 2) as usize);
     
