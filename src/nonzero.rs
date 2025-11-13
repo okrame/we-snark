@@ -13,6 +13,7 @@ use crate::scs::CRS;
 
 /// We enforce that a dedicated slot w[idx_one] == 1.
 /// Prover returns [Q0(τ)]_1 for (B(X) - 1) = Q0(X)*(X - D[idx_one]).
+#[derive(Clone)]
 pub struct NonZeroProof {
     pub q0_tau_1: G1Projective,
     pub w_tau_2: G2Projective, // reuse same [B(τ)]_2 commitment

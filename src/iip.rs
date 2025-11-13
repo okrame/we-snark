@@ -10,6 +10,7 @@ use crate::scs::CRS;
 /// Public digest (vk) for IIP, as in Construction 6.
 #[allow(non_snake_case)]
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct IIPDigest {
     pub x_star: Fr,                           // we use 0
     pub y_star: Fr,                           // 1/n
@@ -21,6 +22,8 @@ pub struct IIPDigest {
     pub n: usize,
     pub N: usize,
 }
+
+#[derive(Clone)]
 #[allow(non_snake_case)]
 pub struct IIPProof {
     pub w_tau_2: G2Projective,      // [B(τ)]_2 = SCS(G2).Commit(w)

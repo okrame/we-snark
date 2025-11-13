@@ -22,6 +22,7 @@ pub struct LVColMeta {
 
 pub enum ProofElem { G1(G1), G2(G2) }
 
+#[derive(Clone)] 
 pub struct LVDigest {
     pub iip: IIPDigest,
     pub one_idx: usize,
@@ -79,6 +80,7 @@ pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
     ])
 }
 
+#[derive(Clone)]
 pub struct LVProof {
     pub iip: IIPProof,
     pub nz: NonZeroProof,
@@ -184,8 +186,7 @@ pub fn recover_sb_via_linear_check(
 }
 
 pub fn lv_verify(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> bool {
-    // 0) Enforce the intended NP relation on the witness:
-    //    w = [x, y, z, 1] with x * y = z and w_3 = 1.
+    // Basic relation checks on the explicit witness vector.
     if pi.w.len() != 4 {
         return false;
     }
@@ -194,7 +195,7 @@ pub fn lv_verify(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> bool {
     let z   = pi.w[2];
     let one = pi.w[3];
 
-    // Mul constraint: x * y = z
+    //Enforce the NP relation x * y = z and w_3 = 1 in Fr.
     if x * y != z {
         return false;
     }
