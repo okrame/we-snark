@@ -1,6 +1,6 @@
 // src/mul_snark.rs
 
-use ark_bn254::{Bn254, Fr, G1Projective as G1};
+use ark_bn254::{Bn254, Fr, G1Projective as G1, G2Projective as G2};
 use ark_ec::PrimeGroup;
 use ark_ec::pairing::Pairing;
 use ark_ff::{One, Zero};
@@ -31,7 +31,10 @@ impl MulWitness {
 #[derive(Clone)]
 pub struct MulDigest {
     pub lv: LVDigest,
-    pub s: Vec<Fr>,
+    // Selectors for the three witness slots
+    pub s_x: Vec<Fr>, // [1,0,0,0]
+    pub s_y: Vec<Fr>, // [0,1,0,0]
+    pub s_z: Vec<Fr>, // [0,0,1,0]
 }
 
 /// Proof object for MulCircuit: reuses LVProof as-is.
@@ -40,7 +43,6 @@ pub struct MulProof {
     pub lv: LVProof,
 }
 
-// ** We do not enforce any relation between these commitments and the LV gadgets yet; they’re just building blocks. **
 /// QAP polynomials for the one-gate MulCircuit:
 /// A(X) = x, B(X) = y, C(X) = z, Z(X) = X - 1, P(X) = A(X)B(X) - C(X).
 #[derive(Clone)]
@@ -60,6 +62,7 @@ pub struct MulQAPPolys {
 pub struct MulQAPCommit {
     pub a_tau_1: G1,
     pub b_tau_1: G1,
+    pub b_tau_2: G2, // [B(τ)]_2 for the P = A·B - C check
     pub c_tau_1: G1,
     pub p_tau_1: G1,
     pub h_tau_1: G1,
@@ -109,6 +112,7 @@ fn build_mul_qap_polys(w: &MulWitness) -> MulQAPPolys {
 fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
     let a_tau_1 = crs.commit_poly_g1(polys.a.coeffs());
     let b_tau_1 = crs.commit_poly_g1(polys.b.coeffs());
+    let b_tau_2 = crs.commit_poly_g2(polys.b.coeffs());
     let c_tau_1 = crs.commit_poly_g1(polys.c.coeffs());
     let p_tau_1 = crs.commit_poly_g1(polys.p.coeffs());
 
@@ -118,6 +122,7 @@ fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
     MulQAPCommit {
         a_tau_1,
         b_tau_1,
+        b_tau_2,
         c_tau_1,
         p_tau_1,
         h_tau_1,
@@ -141,36 +146,57 @@ impl MulDigest {
             "MulCircuit is currently hard-coded for n=4 (slots [x,y,z,1])"
         );
 
-        let s = vec![
+        // Selectors for x, y, z in w = [x, y, z, 1]
+        let s_x = vec![
+            Fr::from(1u32),
+            Fr::from(0u32),
+            Fr::from(0u32),
+            Fr::from(0u32),
+        ];
+        let s_y = vec![
+            Fr::from(0u32),
+            Fr::from(1u32),
+            Fr::from(0u32),
+            Fr::from(0u32),
+        ];
+        let s_z = vec![
             Fr::from(0u32),
             Fr::from(0u32),
             Fr::from(1u32),
             Fr::from(0u32),
         ];
 
-        // Z(X) = X - 1
+        // Z(X) = X - 1 (Mul QAP vanishing poly on the single gate)
         let z_poly = DensePolynomial::from_coefficients_vec(vec![-Fr::one(), Fr::one()]);
         let mul_z_tau_2 = crs.commit_poly_g2(z_poly.coeffs());
 
-        let iip_vk = iip_digest(crs, &s);
+        // IIP vk’s for x, y, z
+        let iip_vk_x = iip_digest(crs, &s_x);
+        let iip_vk_y = iip_digest(crs, &s_y);
+        let iip_vk_z = iip_digest(crs, &s_z);
+
         let lv = LVDigest {
-            iip: iip_vk,
+            iip_x: iip_vk_x,
+            iip_y: iip_vk_y,
+            iip_z: iip_vk_z,
             one_idx: 3,
             mul_z_tau_2,
         };
 
-        MulDigest { lv, s }
+        MulDigest { lv, s_x, s_y, s_z }
     }
 }
-
 
 /// Prover for MulCircuit: given witness w = [x,y,z,1], build LV proof.
 ///
 pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
     let w_vec = w.to_vec();
 
-    let iip_pi = iip_prove(crs, &dg.s, &w_vec);
-    let nz_pi  = nonzero_prove(crs, &w_vec, dg.lv.one_idx);
+    // Three IIP proofs for selectors s_x, s_y, s_z (all over the same witness w)
+    let iip_pi_x = iip_prove(crs, &dg.s_x, &w_vec);
+    let iip_pi_y = iip_prove(crs, &dg.s_y, &w_vec);
+    let iip_pi_z = iip_prove(crs, &dg.s_z, &w_vec);
+    let nz_pi    = nonzero_prove(crs, &w_vec, dg.lv.one_idx);
 
     let polys   = build_mul_qap_polys(w);
     let commits = commit_mul_qap(crs, &polys);
@@ -193,18 +219,21 @@ pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
     }
 
     let lv = LVProof {
-        iip: iip_pi,
-        nz:  nz_pi,
-        w:   w_vec,
+        iip_x: iip_pi_x,
+        iip_y: iip_pi_y,
+        iip_z: iip_pi_z,
+        nz:    nz_pi,
+        w:     w_vec,
         p_tau_1: commits.p_tau_1,
         h_tau_1: commits.h_tau_1,
         a_tau_1: commits.a_tau_1,
+        b_tau_1: commits.b_tau_1,
         c_tau_1: commits.c_tau_1,
+        b_tau_2: commits.b_tau_2
     };
 
     MulProof { lv }
 }
-
 
 /// Verifier wrapper of LV check + field-side mul relation.
 ///
