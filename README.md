@@ -68,10 +68,8 @@ Encryptor only needs:
 
 1. Sample randomness $s$
 2. Compute
-   $$
-   c_1 = s \cdot A_{\text{LV}},\qquad
-   c_2 = s \cdot b_{\text{LV}} + k
-   $$
+   $$c_1 = s \cdot A_{\text{LV}},\qquad
+   c_2 = s \cdot b_{\text{LV}} + k$$
    where $k$ is the symmetric key.
 3. Encrypt the plaintext using AES-GCM with key $k$.
 4. Output:
@@ -89,18 +87,12 @@ Decryptor knows the witness $(x, y, z)$.
 **Steps**
 
 1. Build the witness vector
-   $$
-   w = [x, y, z, 1]
-   $$
+   $$w = [x, y, z, 1]$$
 2. Run the gadgets to compute the LV proof $\pi$.
 3. Check linear consistency:
-   $$
-   A_{\text{LV}} \cdot \pi = b_{\text{LV}}
-   $$
+   $$A_{\text{LV}} \cdot \pi = b_{\text{LV}}$$
 4. Recover
-   $$
-   k = c_1 \cdot \pi - c_2
-   $$
+   $$k = c_1 \cdot \pi - c_2$$
 5. AES-GCM decrypt.
 
 If the witness is invalid, the LV system fails and the key cannot be reconstructed.
@@ -109,9 +101,7 @@ If the witness is invalid, the LV system fails and the key cannot be reconstruct
 
 Right now, the LV digest represents the **language**
 
-$$
-L = {(x,y,z) \mid x \cdot y = z},
-$$
+$$L = {(x,y,z) \mid x \cdot y = z},$$
 
 so the encryptor does not need to know any specific $z_0$.
 
