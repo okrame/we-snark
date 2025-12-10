@@ -9,7 +9,8 @@ use ark_poly::{DenseUVPolynomial, Polynomial, univariate::DensePolynomial};
 use crate::iip::{iip_digest, iip_prove};
 use crate::nonzero::nonzero_prove;
 use crate::scs::CRS;
-use crate::verifier::{LVDigest, LVProof, lv_verify};
+use crate::verifier::{LVDigest, LVProof};
+use crate::helpers::{mul_poly, div_rem, mul_by_xk};
 
 /// Fixed-size MulCircuit witness: w = [x, y, z, 1].
 #[derive(Clone, Debug)]
@@ -84,7 +85,7 @@ fn build_mul_qap_polys(w: &MulWitness) -> MulQAPPolys {
     let c = DensePolynomial::from_coefficients_vec(vec![z]);
 
     // P(X) = A(X)B(X) - C(X)
-    let mut p = CRS::mul_poly(&a, &b);
+    let mut p = mul_poly(&a, &b);
     {
         // subtract C(X) (constant z)
         let mut p_coeffs = p.coeffs().to_vec();
@@ -131,7 +132,7 @@ fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
 
 fn compute_h_poly(_crs: &CRS, polys: &MulQAPPolys) -> DensePolynomial<Fr> {
     // H(X) = P(X) / Z(X), with Z(X) = X - 1
-    let (h, r) = CRS::div_rem(&polys.p, &polys.z);
+    let (h, r) = div_rem(&polys.p, &polys.z);
     debug_assert!(
         r.coeffs().iter().all(|c| c.is_zero()),
         "Mul QAP: P(X) is not divisible by Z(X); bad witness"
@@ -139,6 +140,7 @@ fn compute_h_poly(_crs: &CRS, polys: &MulQAPPolys) -> DensePolynomial<Fr> {
     h
 }
 
+#[allow(non_snake_case)]
 impl MulDigest {
     pub fn setup(crs: &CRS) -> Self {
         assert_eq!(
@@ -175,12 +177,20 @@ impl MulDigest {
         let iip_vk_y = iip_digest(crs, &s_y);
         let iip_vk_z = iip_digest(crs, &s_z);
 
+        // Max degree bound for the SCS witness polynomial B(X) for w=[x,y,z,1]
+        let d_bound = crs.n - 1; // with n=4, d_bound=3
+        let N = crs.N;
+        // [τ^{N-d}]_1 in G1
+        let tau_N_minus_d_1 = crs._g1_tau_pow(N - d_bound);
+
         let lv = LVDigest {
             iip_x: iip_vk_x,
             iip_y: iip_vk_y,
             iip_z: iip_vk_z,
             one_idx: 3,
             mul_z_tau_2,
+            d_bound,
+            tau_N_minus_d_1,
         };
 
         MulDigest { lv, s_x, s_y, s_z }
@@ -189,6 +199,7 @@ impl MulDigest {
 
 /// Prover for MulCircuit: given witness w = [x,y,z,1], build LV proof.
 ///
+#[allow(non_snake_case)]
 pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
     let w_vec = w.to_vec();
 
@@ -200,6 +211,13 @@ pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
 
     let polys   = build_mul_qap_polys(w);
     let commits = commit_mul_qap(crs, &polys);
+
+    // --- MaxDeg for the IIP witness polynomial B(X) ---
+    // Rebuild B(X) as interpolation of w = [x,y,z,1] on D
+    let B_poly = crs.interpolate(&w_vec);
+    let shift = crs.N - dg.lv.d_bound; // N - d
+    let w_hat_poly = mul_by_xk(&B_poly, shift);
+    let w_hat_tau_1 = crs.commit_poly_g1(w_hat_poly.coeffs());
 
     // Optional sanity checks
     #[cfg(debug_assertions)]
@@ -229,15 +247,10 @@ pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
         a_tau_1: commits.a_tau_1,
         b_tau_1: commits.b_tau_1,
         c_tau_1: commits.c_tau_1,
-        b_tau_2: commits.b_tau_2
+        b_tau_2: commits.b_tau_2,
+        w_hat_tau_1,
     };
 
     MulProof { lv }
 }
 
-/// Verifier wrapper of LV check + field-side mul relation.
-///
-/// This is the verifier for the NP relation x*y=z with w=[x,y,z,1].
-pub fn mul_verify(crs: &CRS, dg: &MulDigest, pi: &MulProof) -> bool {
-    lv_verify(crs, &dg.lv, &pi.lv)
-}

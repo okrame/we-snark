@@ -6,7 +6,6 @@ use ark_poly::{
     DenseUVPolynomial, EvaluationDomain, GeneralEvaluationDomain, univariate::DensePolynomial,
 };
 use rand::Rng;
-use std::ops::Mul;
 
 #[allow(non_snake_case)]
 pub struct CRS {
@@ -110,24 +109,6 @@ impl CRS {
         let mut v = evals.to_vec();
         self.domain.ifft_in_place(&mut v);
         DensePolynomial::from_coefficients_vec(v)
-    }
-
-    /// Multiply two polynomials (truncate/extend as needed)
-    pub fn mul_poly(a: &DensePolynomial<Fr>, b: &DensePolynomial<Fr>) -> DensePolynomial<Fr> {
-        a.mul(b)
-    }
-
-    pub fn div_rem(
-        P: &DensePolynomial<Fr>,
-        Q: &DensePolynomial<Fr>,
-    ) -> (DensePolynomial<Fr>, DensePolynomial<Fr>) {
-        let q = P / Q;
-        let r = P - &(&q * Q);
-        (q, r)
-    }
-
-    pub fn poly_from_coeffs(coeffs: Vec<Fr>) -> DensePolynomial<Fr> {
-        DensePolynomial::from_coefficients_vec(coeffs)
     }
 
     /// Convenience: [τ^k]_2 in G2

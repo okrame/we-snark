@@ -4,13 +4,15 @@ mod nonzero;
 mod verifier;
 mod we;
 mod mul_snark;
+mod helpers;
 
 use ark_bn254::Fr;
 use rand::{rng, Rng};
 
 use scs::CRS;
 use we::{aead_encrypt, decrypt_with_lv_header};
-use mul_snark::{MulDigest, MulWitness, mul_prove, mul_verify};
+use mul_snark::{MulDigest, MulWitness, mul_prove};
+use crate::verifier::{lv_verify};
 
 fn main() {
     let mut rng = rng();
@@ -30,7 +32,7 @@ fn main() {
     let pi = mul_prove(&crs, &dg, &w);
 
     // sanity check
-    assert!(mul_verify(&crs, &dg, &pi));
+    assert!(lv_verify(&crs, &dg.lv, &pi.lv));
 
     // --- Encryptor's public LV params and header (no witness needed) ---
     let params = we::lv_public_linear_params(&crs, &dg.lv);
@@ -40,7 +42,7 @@ fn main() {
     println!("b_LV[3] = {:?}", params.shape.b[3]);
 
     // --- AEAD encrypt ---
-    let mut msg = b"hello world".to_vec();
+    let mut msg = b"hello secret world".to_vec();
     let nonce: [u8; 12] = rng.random();
     let tag: Vec<u8> = aead_encrypt(&crs, &params.shape, &hdr, key_enc, nonce, &mut msg);
 

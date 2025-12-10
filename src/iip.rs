@@ -4,6 +4,7 @@ use ark_ec::PrimeGroup;
 use ark_ec::pairing::Pairing;
 use ark_ff::{Field, One, PrimeField, Zero};
 use ark_poly::{DenseUVPolynomial, Polynomial, univariate::DensePolynomial};
+use crate::helpers::{add_constant, sub_poly, scale_poly, mul_by_xk, mul_poly, poly_from_coeffs, div_rem};
 
 use crate::scs::CRS;
 
@@ -86,7 +87,7 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     let v_g1 = <Bn254 as Pairing>::G1::generator().mul_bigint(v_scalar.into_bigint());
 
     // P(X) = A(X)B(X) - (Σ w_i s_i)/y*
-    let mut P = CRS::mul_poly(&A, &B);
+    let mut P = mul_poly(&A, &B);
     //let t = v_scalar * crs.n_inv.inverse().unwrap();  
     //let t = v_scalar * crs.n_inv;  
     let n_field = crs.n_inv.inverse().unwrap(); 
@@ -98,13 +99,13 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
     } else {
         P_coeffs[0] -= t;
     }
-    P = CRS::poly_from_coeffs(P_coeffs);
+    P = poly_from_coeffs(P_coeffs);
 
     // Z(X)
     let Z = DensePolynomial::from_coefficients_vec(crs.vanishing_coeffs.clone());
 
     // 1) Divide P by Z: P = QZ * Z + R, deg R < n
-    let (mut QZ, mut R) = CRS::div_rem(&P, &Z);
+    let (mut QZ, mut R) = div_rem(&P, &Z);
 
     // 2) Adjust so that R(x*) = 0 with x* = 0:
     let x_star = Fr::zero();
@@ -119,7 +120,7 @@ pub fn iip_prove(crs: &CRS, s: &[Fr], w: &[Fr]) -> IIPProof {
 
     // 3) Now R is divisible by (X - x*), define QX = R / (X - x*)
     let lin = DensePolynomial::from_coefficients_vec(vec![-x_star, Fr::one()]);
-    let (QX, rem) = CRS::div_rem(&R, &lin);
+    let (QX, rem) = div_rem(&R, &lin);
     debug_assert!(rem.is_zero(), "R(X) not divisible by (X - x*)");
 
     // Hatted polynomials:
@@ -192,27 +193,4 @@ pub fn iip_verify(d: &IIPDigest, pi: &IIPProof) -> bool {
     }
 
     true
-}
-
-// ------- small polynomial helpers -------
-
-fn add_constant(p: &DensePolynomial<Fr>, c: Fr) -> DensePolynomial<Fr> {
-    let mut v = p.coeffs().to_vec();
-    if v.is_empty() {
-        v.push(c);
-    } else {
-        v[0] += c;
-    }
-    DensePolynomial::from_coefficients_vec(v)
-}
-fn sub_poly(a: &DensePolynomial<Fr>, b: &DensePolynomial<Fr>) -> DensePolynomial<Fr> {
-    DensePolynomial::from_coefficients_vec((a - b).coeffs().to_vec())
-}
-fn scale_poly(p: &DensePolynomial<Fr>, c: Fr) -> DensePolynomial<Fr> {
-    DensePolynomial::from_coefficients_vec(p.coeffs().iter().map(|x| *x * c).collect())
-}
-fn mul_by_xk(p: &DensePolynomial<Fr>, k: usize) -> DensePolynomial<Fr> {
-    let mut v = vec![Fr::zero(); k];
-    v.extend_from_slice(p.coeffs());
-    DensePolynomial::from_coefficients_vec(v)
 }

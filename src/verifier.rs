@@ -22,13 +22,17 @@ pub struct LVColMeta {
 
 pub enum ProofElem { G1(G1), G2(G2) }
 
-#[derive(Clone)] 
+#[derive(Clone)]
+#[allow(non_snake_case)]
 pub struct LVDigest {
     pub iip_x: IIPDigest, 
     pub iip_y: IIPDigest, 
     pub iip_z: IIPDigest,
     pub one_idx: usize,
     pub mul_z_tau_2: G2,
+    // MaxDeg parameters for the IIP witness polynomial B(X)
+    pub d_bound: usize,     // e.g. n-1
+    pub tau_N_minus_d_1: G1 // [τ^{N-d}]_1
 }
 
 pub struct LVCoords(pub [Fq12; LV_NUM_COORDS]);
@@ -69,9 +73,15 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     let c14 = <Bn254 as Pairing>::pairing(pi.iip_z.v_g1, g2).0;
     let c15 = <Bn254 as Pairing>::pairing(pi.c_tau_1, g2).0;
 
+    // --- MaxDeg gadget coordinates ---
+    // c16 = e([τ^{N-d}]_1, [B(τ)]_2) where B(X) is the IIP witness polynomial
+    let c16 = <Bn254 as Pairing>::pairing(dg.tau_N_minus_d_1, pi.iip_z.w_tau_2).0;
+    // c17 = e([X^{N-d} B(X)]_1, g2)
+    let c17 = <Bn254 as Pairing>::pairing(pi.w_hat_tau_1, g2).0;
+
     Some(LVCoords([
     c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,
-    c10,c11,c12,c13,c14,c15,
+    c10,c11,c12,c13,c14,c15,c16,c17
 ]))
 }
 
@@ -102,6 +112,9 @@ pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
         // C–z binding reuses v_z_g1 and C(τ)_1
         ProofElem::G1(pi.iip_z.v_g1),
         ProofElem::G1(pi.c_tau_1),
+        // MaxDeg: witness B(τ) and shifted commitment
+        ProofElem::G2(pi.iip_z.w_tau_2), // c16 proof element (matches ProofG2PublicG1)
+        ProofElem::G1(pi.w_hat_tau_1),   // c17 proof element (matches ProofG1PublicG2)
     ])
 }
 
@@ -119,49 +132,54 @@ pub struct LVProof {
     pub b_tau_1: G1, // [B(τ)]_1  (for A/B binding)
     pub c_tau_1: G1, // [C(τ)]_1
     pub b_tau_2: G2, // [B(τ)]_2 for the P = A·B - C check
+    pub w_hat_tau_1: G1,
 }
 
 /// Number of GT-coordinates we use in A_LV · π = b_LV.
-pub const LV_NUM_COORDS: usize = 16;
+pub const LV_NUM_COORDS: usize = 18;
 
 /// A_LV and b_LV as described above.
 /// - a[i][j] ∈ {-1,0,1} describes exponent α_{i,j} on coordinate c_j in equation i.
 /// - b[i] ∈ GT is the RHS constant for equation i.
 pub struct LVShape {
     pub rows: usize,
-    pub a: [[i8; LV_NUM_COORDS]; 6], // here rows fixed, you can generalize later
-    pub b: [Fq12; 6],
+    pub a: [[i8; LV_NUM_COORDS]; 7], // here rows fixed, you can generalize later
+    pub b: [Fq12; 7],
 }
 
 impl LVDigest {
         pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 6;
+        let rows = 7;
 
-        let mut a = [[0i8; LV_NUM_COORDS]; 6];
+        let mut a = [[0i8; LV_NUM_COORDS]; 7];
 
         // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
         a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 1: c4 * c5^{-1} = 1
         a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 2: c6 * c7^{-1} = 1
         a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0,
-                 0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 3: c8 * c9^{-1} = e(g1,g2)
         a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1,
-                 0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 4 (Mul QAP): c10 * c11^{-1} = 1
         a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 1, -1,  0,  0,  0,  0];
+                 1, -1,  0,  0,  0,  0,  0,  0];
 
         // Eq 5 (C–z binding): c14 * c15^{-1} = 1
         a[5] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  1, -1];
+                 0,  0,  0,  0,  1, -1,  0,  0];
+
+        // Eq 6 (MaxDeg for B): c16 * c17^{-1} = 1
+        a[6] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+                 0,  0,  0,  0,  0,  0,  1, -1];
 
         let gt_one = Fq12::one();
         let gt_const: Fq12 = <Bn254 as Pairing>::pairing(
@@ -176,6 +194,7 @@ impl LVDigest {
             gt_const,       // eq3
             gt_one.clone(), // eq4 (mul)
             gt_one.clone(), // eq5 (C–z binding)
+            gt_one.clone(), // eq6 (MaxDeg)
         ];
 
         LVShape { rows, a, b }
@@ -223,6 +242,11 @@ impl LVDigest {
             // c15 = e(C_tau_1, g2)  (z from QAP C)
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
 
+            // c16 = e([τ^{N-d}]_1, [B(τ)]_2): proof G2, public G1
+            LVColMeta { side: ColSide::ProofG2PublicG1, g1_pub: Some(self.tau_N_minus_d_1), g2_pub: None },
+
+            // c17 = e([X^{N-d} B(X)]_1, g2): proof G1, public g2
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
         ]
     }
 }
