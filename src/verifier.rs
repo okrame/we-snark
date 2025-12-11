@@ -1,4 +1,5 @@
 //src/verifier.rs
+use crate::gadgets::{LVShapeBuilder, LVGadget};
 use crate::iip::{IIPDigest, IIPProof, iip_verify};
 use crate::nonzero::{NonZeroProof, nonzero_verify};
 use crate::scs::CRS;
@@ -147,57 +148,75 @@ pub struct LVShape {
     pub b: [Fq12; 7],
 }
 
-impl LVDigest {
-        pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 7;
+impl LVShape {
+    pub fn from_builder(builder: LVShapeBuilder) -> Self {
+        assert_eq!(
+            builder.cols(),
+            LV_NUM_COORDS,
+            "LVShapeBuilder must use {} columns",
+            LV_NUM_COORDS
+        );
+        assert_eq!(
+            builder.rows(),
+            7,
+            "Phase 1: we still expect exactly 7 LV equations"
+        );
+
+        // Capture the row count *before* moving fields out
+        let rows = builder.rows();
+
+        // Move out the vectors
+        let a_src = builder.a;
+        let b_src = builder.b;
 
         let mut a = [[0i8; LV_NUM_COORDS]; 7];
+        let mut b = [Fq12::one(); 7];
 
-        // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
-        a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
+        for (i, row) in a_src.into_iter().enumerate() {
+            for (j, coeff) in row.into_iter().enumerate() {
+                a[i][j] = coeff;
+            }
+        }
 
-        // Eq 1: c4 * c5^{-1} = 1
-        a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
-
-        // Eq 2: c6 * c7^{-1} = 1
-        a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
-
-        // Eq 3: c8 * c9^{-1} = e(g1,g2)
-        a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1,
-                 0,  0,  0,  0,  0,  0,  0,  0];
-
-        // Eq 4 (Mul QAP): c10 * c11^{-1} = 1
-        a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 1, -1,  0,  0,  0,  0,  0,  0];
-
-        // Eq 5 (C–z binding): c14 * c15^{-1} = 1
-        a[5] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  1, -1,  0,  0];
-
-        // Eq 6 (MaxDeg for B): c16 * c17^{-1} = 1
-        a[6] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  1, -1];
-
-        let gt_one = Fq12::one();
-        let gt_const: Fq12 = <Bn254 as Pairing>::pairing(
-            <Bn254 as Pairing>::G1::generator(),
-            <Bn254 as Pairing>::G2::generator(),
-        ).0;
-
-        let b = [
-            gt_one.clone(), // eq0
-            gt_one.clone(), // eq1
-            gt_one.clone(), // eq2
-            gt_const,       // eq3
-            gt_one.clone(), // eq4 (mul)
-            gt_one.clone(), // eq5 (C–z binding)
-            gt_one.clone(), // eq6 (MaxDeg)
-        ];
+        for (i, rhs) in b_src.into_iter().enumerate() {
+            b[i] = rhs;
+        }
 
         LVShape { rows, a, b }
+    }
+}
+
+
+impl LVDigest {
+    pub fn linear_shape(&self, crs: &CRS) -> LVShape {
+        use crate::gadgets::{IIPGadget, NonZeroGadget, MaxDegGadget, MulGadget, LVShapeBuilder};
+
+        let mut builder = LVShapeBuilder::new();
+
+        // IIP gadget for z: the selector is irrelevant for LV rows themselves,
+        // but we keep a consistent shape [0,0,1,0].
+        let iip_gadget = IIPGadget::new(vec![
+            Fr::from(0u32),
+            Fr::from(0u32),
+            Fr::from(1u32),
+            Fr::from(0u32),
+        ]);
+        let iip_dg = &self.iip_z;
+        iip_gadget.append_constraints(crs, iip_dg, &mut builder);
+
+        // NonZero gadget on the "1" slot (idx_one)
+        let nz_gadget = NonZeroGadget::new(self.one_idx);
+        nz_gadget.append_constraints(crs, &(), &mut builder);
+
+        // Mul/QAP + C–z binding gadget
+        let mul_gadget = MulGadget::new();
+        mul_gadget.append_constraints(crs, &(), &mut builder);
+
+        // MaxDeg gadget on the IIP witness polynomial B(X)
+        let maxdeg_gadget = MaxDegGadget::new(self.d_bound);
+        maxdeg_gadget.append_constraints(crs, &(), &mut builder);
+
+        LVShape::from_builder(builder)
     }
 
 

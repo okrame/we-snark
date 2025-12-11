@@ -5,6 +5,8 @@ mod verifier;
 mod we;
 mod mul_snark;
 mod helpers;
+mod gadgets;
+mod compiler;
 
 use ark_bn254::Fr;
 use rand::{rng, Rng};
