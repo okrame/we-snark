@@ -175,8 +175,6 @@ pub fn lv_key_from_header(
 ) -> Option<[u8; 32]> {
     if hdr.c1.len() != LV_NUM_COORDS { return None; }
 
-    if !crate::verifier::lv_verify(crs, dg, pi) { return None; }
-
     let proof_elems = build_proof_side_elems(crs, dg, pi)?;
 
     // Compute ∏_j e(proof_side_j, ct1[j]) = ∏_i b_i^{r_i} via bilinearity

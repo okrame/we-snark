@@ -80,9 +80,13 @@ pub(crate) fn build_lv_coords(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> Option<
     // c17 = e([X^{N-d} B(X)]_1, g2)
     let c17 = <Bn254 as Pairing>::pairing(pi.w_hat_tau_1, g2).0;
 
+    // A/B binding inside LV: x and y as G1 from IIP
+    let c18 = <Bn254 as Pairing>::pairing(pi.iip_x.v_g1, g2).0;
+    let c19 = <Bn254 as Pairing>::pairing(pi.iip_y.v_g1, g2).0;
+
     Some(LVCoords([
     c0,c1,c2,c3,c4,c5,c6,c7,c8,c9,
-    c10,c11,c12,c13,c14,c15,c16,c17
+    c10,c11,c12,c13,c14,c15,c16,c17,c18,c19
 ]))
 }
 
@@ -116,6 +120,9 @@ pub(crate) fn build_proof_side_elems(_crs: &CRS, dg: &LVDigest, pi: &LVProof)
         // MaxDeg: witness B(τ) and shifted commitment
         ProofElem::G2(pi.iip_z.w_tau_2), // c16 proof element (matches ProofG2PublicG1)
         ProofElem::G1(pi.w_hat_tau_1),   // c17 proof element (matches ProofG1PublicG2)
+        // A/B binding inside LV: x and y as G1 from IIP
+        ProofElem::G1(pi.iip_x.v_g1),     // c18
+        ProofElem::G1(pi.iip_y.v_g1),     // c19
     ])
 }
 
@@ -132,59 +139,66 @@ pub struct LVProof {
     pub a_tau_1: G1, // [A(τ)]_1
     pub b_tau_1: G1, // [B(τ)]_1  (for A/B binding)
     pub c_tau_1: G1, // [C(τ)]_1
-    pub b_tau_2: G2, // [B(τ)]_2 for the P = A·B - C check
     pub w_hat_tau_1: G1,
 }
 
 /// Number of GT-coordinates we use in A_LV · π = b_LV.
-pub const LV_NUM_COORDS: usize = 18;
+pub const LV_NUM_COORDS: usize = 20;
 
 /// A_LV and b_LV as described above.
 /// - a[i][j] ∈ {-1,0,1} describes exponent α_{i,j} on coordinate c_j in equation i.
 /// - b[i] ∈ GT is the RHS constant for equation i.
 pub struct LVShape {
     pub rows: usize,
-    pub a: [[i8; LV_NUM_COORDS]; 8], // here rows fixed, you can generalize later
-    pub b: [Fq12; 8],
+    pub a: [[i8; LV_NUM_COORDS]; 10],
+    pub b: [Fq12; 10],
 }
 
 impl LVDigest {
         pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 8;
+        let rows = 10;
 
-        let mut a = [[0i8; LV_NUM_COORDS]; 8];
+        let mut a = [[0i8; LV_NUM_COORDS]; 10];
 
         // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
         a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 1: c4 * c5^{-1} = 1
         a[1] = [ 0,  0,  0,  0,  1, -1,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 2: c6 * c7^{-1} = 1
         a[2] = [ 0,  0,  0,  0,  0,  0,  1, -1,  0,  0,
-                 0,  0,  0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 3: c8 * c9^{-1} = e(g1,g2)
         a[3] = [ 0,  0,  0,  0,  0,  0,  0,  0,  1, -1,
-                 0,  0,  0,  0,  0,  0,  0,  0];
+                 0,  0,  0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 4 (Mul QAP): c10 * c11^{-1} = 1
         a[4] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 1, -1,  0,  0,  0,  0,  0,  0];
+                 1, -1,  0,  0,  0,  0,  0,  0,  0,  0];
 
         // Eq 5 (C–z binding): c14 * c15^{-1} = 1
         a[5] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  1, -1,  0,  0];
+                 0,  0,  0,  0,  1, -1,  0,  0,  0,  0];
 
         // Eq 6 (MaxDeg for B): c16 * c17^{-1} = 1
         a[6] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
-                 0,  0,  0,  0,  0,  0,  1, -1];
+                 0,  0,  0,  0,  0,  0,  1, -1,  0,  0];
 
         // Eq 7 instance binding z = z0
         a[7] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 1, 0, 0, 0];
+                0, 0, 0, 0, 1, 0, 0, 0, 0, 0];
+
+        // Eq 8: c12 * c18^{-1} = 1   (A(τ) == x from IIP_x)
+        a[8] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+                 0,  0,  1,  0,  0,  0,  0,  0, -1,  0];
+
+        // Eq 9: c13 * c19^{-1} = 1   (B(τ) == y from IIP_y)
+        a[9] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+                 0,  0,  0,  1,  0,  0,  0,  0,  0, -1];
 
 
         let gt_one = Fq12::one();
@@ -193,7 +207,7 @@ impl LVDigest {
             <Bn254 as Pairing>::G2::generator(),
         ).0;
 
-        let mut b = [gt_one.clone(); 8];
+        let mut b = [gt_one.clone(); 10];
         b[3] = gt_const;
 
         // Eq 7: z = z0 ⇒ c14 = e(z0·G1, G2)
@@ -240,7 +254,7 @@ impl LVDigest {
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(self.mul_z_tau_2) },
             // c12 = e(A_tau_1, g2) optional
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
-            // c13 = e(C_tau_1, g2) optional
+            // c13 = e(B_tau_1, g2) optional
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
             // c14 = e(v_g1, g2)  (z from IIP)
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
@@ -251,6 +265,12 @@ impl LVDigest {
             LVColMeta { side: ColSide::ProofG2PublicG1, g1_pub: Some(self.tau_N_minus_d_1), g2_pub: None },
 
             // c17 = e([X^{N-d} B(X)]_1, g2): proof G1, public g2
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+
+            // c18 = e(v_x_g1, g2)  (x from IIP_x)
+            LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
+
+            // c19 = e(v_y_g1, g2)  (y from IIP_y)
             LVColMeta { side: ColSide::ProofG1PublicG2, g1_pub: None, g2_pub: Some(g2) },
         ]
     }
@@ -291,46 +311,6 @@ pub fn lv_verify(crs: &CRS, dg: &LVDigest, pi: &LVProof) -> bool {
         if !iip_verify(&dg.iip_y, &pi.iip_y) { return false; }
         if !iip_verify(&dg.iip_z, &pi.iip_z) { return false; }
         if !nonzero_verify(crs, &pi.nz, dg.one_idx) { return false; }
-    }
-
-    // Optional: keep the original gadgets as safety checks in debug builds
-    #[cfg(debug_assertions)]
-    {
-        if !iip_verify(&dg.iip_x, &pi.iip_x) { return false; }
-        if !iip_verify(&dg.iip_y, &pi.iip_y) { return false; }
-        if !iip_verify(&dg.iip_z, &pi.iip_z) { return false; }
-        if !nonzero_verify(crs, &pi.nz, dg.one_idx) { return false; }
-    }
-
-    // group-level Mul gadget at τ:
-    // A/B binding: enforce that A(τ) = x and B(τ) = y using IIP selectors
-    {
-        let g2 = <Bn254 as Pairing>::G2::generator();
-
-        // From IIP with s_x = [1,0,0,0], v_x = x · [1]_1
-        let gt_A = <Bn254 as Pairing>::pairing(pi.a_tau_1, g2).0;
-        let gt_x = <Bn254 as Pairing>::pairing(pi.iip_x.v_g1, g2).0;
-        if gt_A != gt_x {
-            return false;
-        }
-
-        // From IIP with s_y = [0,1,0,0], v_y = y · [1]_1
-        let gt_B = <Bn254 as Pairing>::pairing(pi.b_tau_1, g2).0;
-        let gt_y = <Bn254 as Pairing>::pairing(pi.iip_y.v_g1, g2).0;
-        if gt_B != gt_y {
-            return false;
-        }
-    }
-    // Group-level Mul gadget: enforce P(τ) = A(τ)·B(τ) - C(τ)
-    {
-        let g2 = <Bn254 as Pairing>::G2::generator();
-        let gt_ab = <Bn254 as Pairing>::pairing(pi.a_tau_1, pi.b_tau_2).0;
-        let gt_p  = <Bn254 as Pairing>::pairing(pi.p_tau_1, g2).0;
-        let gt_c  = <Bn254 as Pairing>::pairing(pi.c_tau_1, g2).0;
-
-        if gt_ab != gt_p * gt_c {
-            return false;
-        }
     }
 
     let shape = dg.linear_shape(crs);

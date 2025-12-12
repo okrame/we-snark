@@ -1,6 +1,6 @@
 // src/mul_snark.rs
 
-use ark_bn254::{Bn254, Fr, G1Projective as G1, G2Projective as G2};
+use ark_bn254::{Bn254, Fr, G1Projective as G1};
 use ark_ec::PrimeGroup;
 use ark_ec::pairing::Pairing;
 use ark_ff::{One, Zero};
@@ -63,7 +63,6 @@ pub struct MulQAPPolys {
 pub struct MulQAPCommit {
     pub a_tau_1: G1,
     pub b_tau_1: G1,
-    pub b_tau_2: G2, // [B(τ)]_2 for the P = A·B - C check
     pub c_tau_1: G1,
     pub p_tau_1: G1,
     pub h_tau_1: G1,
@@ -113,7 +112,6 @@ fn build_mul_qap_polys(w: &MulWitness) -> MulQAPPolys {
 fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
     let a_tau_1 = crs.commit_poly_g1(polys.a.coeffs());
     let b_tau_1 = crs.commit_poly_g1(polys.b.coeffs());
-    let b_tau_2 = crs.commit_poly_g2(polys.b.coeffs());
     let c_tau_1 = crs.commit_poly_g1(polys.c.coeffs());
     let p_tau_1 = crs.commit_poly_g1(polys.p.coeffs());
 
@@ -123,7 +121,6 @@ fn commit_mul_qap(crs: &CRS, polys: &MulQAPPolys) -> MulQAPCommit {
     MulQAPCommit {
         a_tau_1,
         b_tau_1,
-        b_tau_2,
         c_tau_1,
         p_tau_1,
         h_tau_1,
@@ -172,7 +169,7 @@ impl MulDigest {
         let z_poly = DensePolynomial::from_coefficients_vec(vec![-Fr::one(), Fr::one()]);
         let mul_z_tau_2 = crs.commit_poly_g2(z_poly.coeffs());
 
-        // IIP vk’s for x, y, z
+        // IIP vk's for x, y, z
         let iip_vk_x = iip_digest(crs, &s_x);
         let iip_vk_y = iip_digest(crs, &s_y);
         let iip_vk_z = iip_digest(crs, &s_z);
@@ -248,10 +245,8 @@ pub fn mul_prove(crs: &CRS, dg: &MulDigest, w: &MulWitness) -> MulProof {
         a_tau_1: commits.a_tau_1,
         b_tau_1: commits.b_tau_1,
         c_tau_1: commits.c_tau_1,
-        b_tau_2: commits.b_tau_2,
         w_hat_tau_1,
     };
 
     MulProof { lv }
 }
-

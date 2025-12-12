@@ -79,7 +79,7 @@ fn main() {
                      serialized_size(&pi.lv.nz.q0_tau_1) + serialized_size(&pi.lv.nz.w_tau_2) +
                      serialized_size(&pi.lv.p_tau_1) + serialized_size(&pi.lv.h_tau_1) +
                      serialized_size(&pi.lv.a_tau_1) + serialized_size(&pi.lv.b_tau_1) +
-                     serialized_size(&pi.lv.c_tau_1) + serialized_size(&pi.lv.b_tau_2) +
+                     serialized_size(&pi.lv.c_tau_1) +
                      serialized_size(&pi.lv.w_hat_tau_1);
     println!("LV Proof: {}", proof_size);
 
