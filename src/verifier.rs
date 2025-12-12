@@ -30,6 +30,7 @@ pub struct LVDigest {
     pub iip_z: IIPDigest,
     pub one_idx: usize,
     pub mul_z_tau_2: G2,
+    pub instance_z: Fr,
     // MaxDeg parameters for the IIP witness polynomial B(X)
     pub d_bound: usize,     // e.g. n-1
     pub tau_N_minus_d_1: G1 // [τ^{N-d}]_1
@@ -143,15 +144,15 @@ pub const LV_NUM_COORDS: usize = 18;
 /// - b[i] ∈ GT is the RHS constant for equation i.
 pub struct LVShape {
     pub rows: usize,
-    pub a: [[i8; LV_NUM_COORDS]; 7], // here rows fixed, you can generalize later
-    pub b: [Fq12; 7],
+    pub a: [[i8; LV_NUM_COORDS]; 8], // here rows fixed, you can generalize later
+    pub b: [Fq12; 8],
 }
 
 impl LVDigest {
         pub fn linear_shape(&self, _crs: &CRS) -> LVShape {
-        let rows = 7;
+        let rows = 8;
 
-        let mut a = [[0i8; LV_NUM_COORDS]; 7];
+        let mut a = [[0i8; LV_NUM_COORDS]; 8];
 
         // Eq 0: c0 * c1^{-1} * c2^{-1} * c3^{-1} = 1
         a[0] = [ 1, -1, -1, -1,  0,  0,  0,  0,  0,  0,
@@ -181,22 +182,26 @@ impl LVDigest {
         a[6] = [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
                  0,  0,  0,  0,  0,  0,  1, -1];
 
+        // Eq 7 instance binding z = z0
+        a[7] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 1, 0, 0, 0];
+
+
         let gt_one = Fq12::one();
         let gt_const: Fq12 = <Bn254 as Pairing>::pairing(
             <Bn254 as Pairing>::G1::generator(),
             <Bn254 as Pairing>::G2::generator(),
         ).0;
 
-        let b = [
-            gt_one.clone(), // eq0
-            gt_one.clone(), // eq1
-            gt_one.clone(), // eq2
-            gt_const,       // eq3
-            gt_one.clone(), // eq4 (mul)
-            gt_one.clone(), // eq5 (C–z binding)
-            gt_one.clone(), // eq6 (MaxDeg)
-        ];
+        let mut b = [gt_one.clone(); 8];
+        b[3] = gt_const;
 
+        // Eq 7: z = z0 ⇒ c14 = e(z0·G1, G2)
+        let g1 = <Bn254 as Pairing>::G1::generator();
+        let g2 = <Bn254 as Pairing>::G2::generator();
+        let z0_g1 = g1.mul_bigint(self.instance_z.into_bigint());
+        b[7] = <Bn254 as Pairing>::pairing(z0_g1, g2).0;
+        
         LVShape { rows, a, b }
     }
 

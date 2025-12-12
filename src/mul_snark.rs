@@ -142,7 +142,7 @@ fn compute_h_poly(_crs: &CRS, polys: &MulQAPPolys) -> DensePolynomial<Fr> {
 
 #[allow(non_snake_case)]
 impl MulDigest {
-    pub fn setup(crs: &CRS) -> Self {
+    pub fn setup(crs: &CRS, z0: Fr) -> Self {
         assert_eq!(
             crs.n, 4,
             "MulCircuit is currently hard-coded for n=4 (slots [x,y,z,1])"
@@ -189,6 +189,7 @@ impl MulDigest {
             iip_z: iip_vk_z,
             one_idx: 3,
             mul_z_tau_2,
+            instance_z: z0,
             d_bound,
             tau_N_minus_d_1,
         };
